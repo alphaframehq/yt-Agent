@@ -343,3 +343,9 @@ def list_topics_queue(status: Optional[str] = None) -> List[Dict[str, Any]]:
     if status:
         return [it for it in items if it.get("status") == status]
     return items
+
+
+# Aliases for queue management
+dequeue_next_topic = get_next_topic
+get_topic_queue = list_topics_queue
+

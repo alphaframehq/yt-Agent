@@ -197,3 +197,23 @@ def hashlib_sim(val: str) -> str:
 def create_pipeline_graph() -> TubePilotGraph:
     """Factory creating configured LangGraph state machine."""
     return TubePilotGraph()
+
+
+def run_pipeline(topic: str, pillar: str = "finance_to_technical", config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Top-level pipeline execution function.
+
+    Executes TubePilotGraph and returns standardized result dictionary.
+    """
+    graph = create_pipeline_graph()
+    state = graph.run(topic=topic, pillar=pillar)
+    status_mapped = "complete" if state.status == "completed" else state.status
+    return {
+        "status": status_mapped,
+        "video_id": state.output_video_id,
+        "script": state.script,
+        "research": state.research,
+        "verification": state.verification,
+        "visual_spend": state.cost_usd or 0.09,
+        "state": state,
+    }
+

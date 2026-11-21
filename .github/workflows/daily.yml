@@ -1,0 +1,93 @@
+name: TubePilot AI Daily Automation
+
+on:
+  schedule:
+    # Runs at 04:00 UTC every single day (1 longform + 3 shorts)
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Specific Topic to Research & Produce (leave blank to pop from Queue)'
+        required: false
+        default: ''
+        type: string
+      pillar:
+        description: 'Content Pillar'
+        required: true
+        default: 'finance_to_technical'
+        type: choice
+        options:
+          - 'finance_to_technical'
+          - 'tech_to_financial'
+
+permissions:
+  contents: read
+
+jobs:
+  produce-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+      PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+      YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Dependencies (FFmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify DynamoDB Tables & Config
+        run: |
+          python -c "from db.setup_dynamo import setup_all_tables; setup_all_tables()"
+          python -c "from storage.ephemeral import startup_orphan_sweep; startup_orphan_sweep()"
+
+      - name: Run Pipeline (With Retry for Network Resilience)
+        id: run_pipeline
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 40
+          max_attempts: 2
+          retry_on: error
+          command: |
+            python -u scripts/dev_run.py \
+              ${{ inputs.topic && format('--topic "{0}"', inputs.topic) || '' }} \
+              --pillar ${{ inputs.pillar || 'finance_to_technical' }} \
+              --no-stop
+
+      - name: Notify Success on Telegram
+        if: success()
+        run: |
+          python scripts/notify.py "✅ *TubePilot AI Daily Run Completed Successfully!* Videos uploaded private to YouTube and registered in DynamoDB."
+
+      - name: Notify Failure on Telegram
+        if: failure()
+        run: |
+          python scripts/notify_failure.py "daily_workflow" "GitHub Actions Daily Job Failed. Inspect runner logs." "${{ github.run_id }}" "${{ inputs.topic || 'Daily Scheduled Run' }}"

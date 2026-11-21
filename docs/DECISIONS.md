@@ -20,3 +20,7 @@ Shorts reuse the same research bundle as the long-form video. 3 shorts per daily
 
 ## D-007: Telegram Hot-Swapping & In-Memory Fallback
 Bot handles key hot-swapping through encrypted Fernet PBKDF2 without application restarts. All `/keys set` commands request 30-second user deletion. When DynamoDB is offline (local development/unit tests), an in-memory fallback cache securely stores values for the lifetime of the process.
+
+## D-008: Automated Codespace Shutdown
+To prevent idle compute billing when running inside GitHub Codespaces, `scripts/dev_run.py` explicitly invokes `gh codespace stop` within a `finally` block unless `--no-stop` is passed. `.devcontainer/devcontainer.json` also configures `shutdownAction: stopContainer`.
+

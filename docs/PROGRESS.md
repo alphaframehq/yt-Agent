@@ -56,16 +56,21 @@
 - [x] `telegram_bot/dispatch.py` (GitHub Actions workflow dispatch trigger + local topic queueing)
 - [x] `tests/test_bot.py` (8/8 unit tests passing)
 
-## Phase 8: CI/CD, Docs & Final Integration (Next)
-- [ ] scripts/notify.py, notify_failure.py, notify_success.py, dev_run.py
-- [ ] .github/workflows/daily.yml
-- [ ] .devcontainer/devcontainer.json
-- [ ] README.md
-- [ ] Final integration tests
+## Phase 8: CI/CD, Docs & Final Integration
+- [x] `scripts/notify.py` (Telegram markdown alerts + inline action buttons)
+- [x] `scripts/notify_failure.py` (Automated failure alert dispatch with GitHub run context)
+- [x] `scripts/notify_success.py` (Automated success dispatch with private URL and 5 action buttons)
+- [x] `scripts/dev_run.py` (Local/Codespaces runner with guaranteed `finally` Codespace shutdown)
+- [x] `.github/workflows/daily.yml` (Cron 0 4 * * *, manual dispatch, retry logic, error handling)
+- [x] `.devcontainer/devcontainer.json` (Python 3.11, AWS CLI, gh CLI, auto-stop on 10 min idle)
+- [x] `README.md` (Full architecture, setup guide, Telegram cheatsheet, error taxonomy)
+- [x] `tests/test_integration.py` (5/5 tests passing: notify, success/failure formatting, dev_run lifecycle, codespace stop)
 
 ## Last Verified Commands
 - `python -m unittest tests/test_bot.py -v` -> `Ran 8 tests in 3.899s. OK` (Verified 2026-11-22)
-- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 49 tests in 33.260s. OK` (All 49 tests across Phases 1-7 verified passing 2026-11-22)
+- `python -m unittest tests/test_integration.py -v` -> `Ran 5 tests in 1.431s. OK` (Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 54 tests in 24.120s. OK` (All 54 tests across all 8 Phases verified passing 2026-11-22)
+
 
 ## Open Issues
 (none)
