@@ -16,6 +16,7 @@ from agents.charts import (
 from agents.research import ResearchAgent, ResearchInput, run_research
 from agents.script import ScriptAgent, generate_shorts, run_script
 from agents.tts import TTSAgent, synthesize_scene_audio, synthesize_script_audio
+from agents.uploader import UploaderAgent, UploadResult, run_upload
 from agents.verify import VerificationAgent, run_verification
 from agents.visuals import VisualBudgetTracker, VisualPipeline, resolve_scene_visuals
 
@@ -38,6 +39,9 @@ __all__ = [
     "VideoAssembler",
     "assemble_video",
     "assemble_shorts",
+    "UploaderAgent",
+    "UploadResult",
+    "run_upload",
     # Charts
     "revenue_trend",
     "segment_breakdown",

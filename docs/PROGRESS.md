@@ -41,13 +41,14 @@
 - [x] `agents/assemble.py` (MoviePy + FFmpeg compositor, subtitle burn-in, Longform 16:9 + Shorts 9:16)
 - [x] `tests/test_media.py` (6/6 tests passing, sample chart verified)
 
-## Phase 6: Upload & Ephemeral Storage (Next)
-- [ ] agents/uploader.py (Private upload, thumbnail, DynamoDB update, local purge)
-- [ ] db/setup_dynamo.py (7 tables, provisioned 5 RCU/WCU, GSI, TTL)
-- [ ] db/dynamo.py (CRUD helpers)
-- [ ] storage/ephemeral.py (4 cleanup layers)
+## Phase 6: Upload & Ephemeral Storage
+- [x] `agents/uploader.py` (Private upload, thumbnail attachment, DynamoDB registration, immediate local disk purge, 5 Telegram action buttons)
+- [x] `db/setup_dynamo.py` (Provisioned 5 RCU/WCU setup script for all 7 tables with GSI and TTL rules)
+- [x] `db/dynamo.py` (Complete CRUD layer for yt_videos, yt_research_cache, yt_verification_log, yt_pipeline_runs, yt_topics_queue, yt_bot_requests)
+- [x] `storage/ephemeral.py` (4 cleanup layers: atexit, S3 lifecycle, DynamoDB TTL, startup defensive sweep)
+- [x] `tests/test_storage_uploader.py` (7/7 tests passing)
 
-## Phase 7: Telegram Bot & Control Plane
+## Phase 7: Telegram Bot & Control Plane (Next)
 - [ ] telegram_bot/bot.py & command handlers
 - [ ] telegram_bot/keys.py
 - [ ] telegram_bot/health.py
@@ -63,8 +64,8 @@
 
 ## Last Verified Commands
 - `python -c "import sys; sys.path.insert(0, 'c:/Users/balra/alphaframehq/yt-agent'); from models import *; from config_manager import get_config, set_config, snapshot_config, reset_config; from tools.secrets import get_secret, mask_secret; print('ALL PHASE 1 IMPORTS SUCCEEDED!')"` -> `ALL PHASE 1 IMPORTS SUCCEEDED!` (Verified 2026-11-22)
-- `python -m unittest tests/test_media.py -v` -> `Ran 6 tests in 2.515s. OK` (Sample chart verified: `cache/charts/stub_revenue_trend.png`, 4947 bytes, Verified 2026-11-22)
-- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 34 tests in 28.632s. OK` (All 34 tests across Phases 1-5 verified passing 2026-11-22)
+- `python -m unittest tests/test_storage_uploader.py -v` -> `Ran 7 tests in 11.577s. OK` (Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 41 tests in 38.370s. OK` (All 41 tests across Phases 1-6 verified passing 2026-11-22)
 
 ## Open Issues
 (none)
