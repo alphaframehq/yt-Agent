@@ -6,19 +6,20 @@
 - [x] Secrets handler (`tools/secrets.py` with Fernet PBKDF2 encryption + DynamoDB + env fallback)
 - [x] Project scaffold (`requirements.txt`, `.gitignore`, `.env.example`, all package `__init__.py`)
 
-## Phase 2: External Tools (In Progress)
-- [ ] tools/llm_provider.py (Bedrock + Gemini + OpenRouter with retry & fallback)
-- [ ] tools/image_gen.py (Imagen 3 + Gemini Flash + FLUX, cached by MD5)
-- [ ] tools/sec_edgar.py (SEC 10-K / 10-Q filing extractor)
-- [ ] tools/yfinance_tool.py (Financial metrics, revenue segments, competitors)
-- [ ] tools/tinyfish.py (Fintech news & context crawler)
-- [ ] tools/youtube_api.py (Competitor landscape, search, upload, publish)
-- [ ] tools/pixabay.py (Stock footage & background music search)
-- [ ] tools/fal_ai.py (LTX-Video AI generation)
-- [ ] tools/replicate_tool.py (FLUX schnell fallback)
-- [ ] tools/polly.py (AWS Polly Neural / Standard TTS)
+## Phase 2: External Tools
+- [x] `tools/llm_provider.py` (Bedrock + Gemini + OpenRouter with retry & fallback chain)
+- [x] `tools/image_gen.py` (Imagen 3 + Gemini Flash + FLUX, cached by MD5, dark mode styling)
+- [x] `tools/sec_edgar.py` (SEC 10-K / 10-Q filing extractor, fair access user-agent)
+- [x] `tools/yfinance_tool.py` (Financial metrics, revenue segments, margins, competitors)
+- [x] `tools/tinyfish.py` (Fintech news & context crawler)
+- [x] `tools/youtube_api.py` (Competitor landscape, search, upload, publish, delete)
+- [x] `tools/pixabay.py` (Stock footage & background music search)
+- [x] `tools/fal_ai.py` (LTX-Video AI generation)
+- [x] `tools/replicate_tool.py` (FLUX schnell fallback)
+- [x] `tools/polly.py` (AWS Polly Neural / Standard TTS, SSML prosody, duration detection)
+- [x] `tests/test_tools.py` (9/9 unit tests passing)
 
-## Phase 3: AI Agents (Research, Script, Verification)
+## Phase 3: AI Agents (Research, Script, Verification) (Next)
 - [ ] agents/research.py & prompts/research_agent.txt
 - [ ] agents/script.py & prompts/script_*.txt (Longform + Shorts)
 - [ ] agents/verify.py & prompts/verify_*.txt (7 deterministic + 2 LLM checks)
@@ -59,6 +60,7 @@
 
 ## Last Verified Commands
 - `python -c "import sys; sys.path.insert(0, 'c:/Users/balra/alphaframehq/yt-agent'); from models import *; from config_manager import get_config, set_config, snapshot_config, reset_config; from tools.secrets import get_secret, mask_secret; print('ALL PHASE 1 IMPORTS SUCCEEDED!')"` -> `ALL PHASE 1 IMPORTS SUCCEEDED!` (Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 9 tests in 9.594s. OK` (Verified 2026-11-22)
 
 ## Open Issues
 (none)
