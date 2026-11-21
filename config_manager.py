@@ -36,6 +36,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "voice": "Joanna",
     "schedule": "0 4 * * *",
     "paused": False,
+    "channel_name": "TubePilot AI",
+    "cta": {
+        "like_subscribe": "If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.",
+        "midroll": "If this breakdown brings clarity to complex fintech systems, drop a like below to support independent technical analysis.",
+        "outro": "Subscribe to {channel_name} for weekly engineering deep dives into the plumbing of global finance.",
+        "comment_prompt": "What fintech architecture or P&L model should we analyze next? Leave your thoughts in the comments below.",
+    },
 }
 
 _TABLE_NAME: str = "yt_config"
@@ -102,8 +109,11 @@ def _invalidate_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
+_in_memory_config: dict[str, Any] = copy.deepcopy(DEFAULT_CONFIG)
+
+
 def _load_full_config() -> dict[str, Any]:
-    """Fetch the full config dict from DynamoDB or return cached / default."""
+    """Fetch the full config dict from DynamoDB or return cached / in-memory fallback."""
     global _cache, _cache_ts
 
     if _cache_valid():
@@ -124,14 +134,16 @@ def _load_full_config() -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             logger.warning("DynamoDB read failed ({}); using defaults", exc)
 
-    # Fall back to defaults
-    _cache = copy.deepcopy(DEFAULT_CONFIG)
+    # Fall back to in-memory config
+    _cache = copy.deepcopy(_in_memory_config)
     _cache_ts = time.monotonic()
     return _cache
 
 
 def _save_full_config(cfg: dict[str, Any]) -> None:
-    """Persist the full config dict to DynamoDB."""
+    """Persist the full config dict to DynamoDB or in-memory fallback."""
+    global _in_memory_config
+    _in_memory_config = copy.deepcopy(cfg)
     table = _get_table()
     if table is None:
         logger.warning("DynamoDB unavailable — config saved in-memory only")
@@ -142,6 +154,7 @@ def _save_full_config(cfg: dict[str, Any]) -> None:
         logger.info("Config saved to DynamoDB")
     except Exception as exc:  # noqa: BLE001
         logger.error("DynamoDB write failed: {}", exc)
+
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +204,10 @@ __all__ = [
 ]
 
 
-def get_config(key_path: str) -> Any:
+_UNSET = object()
+
+
+def get_config(key_path: str, default: Any = _UNSET) -> Any:
     """Return the config value at *key_path* (dot-notation).
 
     Uses a 5-second in-memory cache.  Falls back to ``DEFAULT_CONFIG``
@@ -199,21 +215,25 @@ def get_config(key_path: str) -> Any:
 
     Args:
         key_path: Dot-separated path, e.g. ``"active_models.verify"``.
+        default: Optional fallback if key is missing from config and defaults.
 
     Returns:
         The stored (or default) value.
 
     Raises:
-        KeyError: If *key_path* is not found in either source.
+        KeyError: If *key_path* is not found and no default is provided.
     """
     cfg = _load_full_config()
     try:
         return _resolve_path(cfg, key_path)
     except KeyError:
-        logger.debug(
-            "Key '{}' missing in stored config; trying defaults", key_path
-        )
-        return _resolve_path(DEFAULT_CONFIG, key_path)
+        try:
+            return _resolve_path(DEFAULT_CONFIG, key_path)
+        except KeyError:
+            if default is not _UNSET:
+                return default
+            raise
+
 
 
 def set_config(key_path: str, value: Any) -> None:
@@ -248,7 +268,49 @@ def snapshot_config() -> dict[str, Any]:
 
 def reset_config() -> None:
     """Reset the configuration to ``DEFAULT_CONFIG`` and persist."""
+    global _in_memory_config
     defaults = copy.deepcopy(DEFAULT_CONFIG)
+    _in_memory_config = copy.deepcopy(defaults)
     _save_full_config(defaults)
     _invalidate_cache()
     logger.info("Config reset to defaults")
+
+
+# ---------------------------------------------------------------------------
+# Channel Branding & Call-To-Action (CTA) Helpers
+# ---------------------------------------------------------------------------
+
+def get_channel_branding() -> dict[str, Any]:
+    """Retrieve configured channel name and call-to-action (CTA) templates."""
+    name = get_config("channel_name", default="TubePilot AI")
+    cta = get_config("cta", default=DEFAULT_CONFIG["cta"])
+    if isinstance(cta, str):
+        cta = {
+            "like_subscribe": cta,
+            "outro": cta,
+            "midroll": cta,
+            "comment_prompt": "Leave your thoughts in the comments.",
+        }
+    return {
+        "channel_name": name,
+        "cta": cta,
+    }
+
+
+def set_channel_name(name: str) -> None:
+    """Update channel name in DynamoDB and in-memory cache."""
+    name_clean = name.strip()
+    if not name_clean:
+        raise ValueError("Channel name cannot be empty.")
+    set_config("channel_name", name_clean)
+    logger.info("Channel name updated to: '{}'", name_clean)
+
+
+def set_cta(cta_text: str, cta_type: str = "like_subscribe") -> None:
+    """Update CTA text in DynamoDB and in-memory cache."""
+    cta_clean = cta_text.strip()
+    if not cta_clean:
+        raise ValueError("CTA text cannot be empty.")
+    set_config(f"cta.{cta_type}", cta_clean)
+    logger.info("CTA '{}' updated to: '{}'", cta_type, cta_clean[:60])
+

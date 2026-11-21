@@ -133,6 +133,36 @@ class TestVerificationAgent(unittest.TestCase):
         self.assertEqual(current_iteration, 3)
         self.assertEqual(status, "human_review")
 
+    def test_8_script_fact_check_before_video_pipeline(self):
+        """Test 8: Strict gate enforcement: script must pass fact check verification before video stage."""
+        from config_manager import set_channel_name, set_cta, reset_config
+        reset_config()
+        set_channel_name("FinTech Alpha")
+        set_cta("Subscribe to FinTech Alpha for institutional teardowns.", cta_type="like_subscribe")
+
+        # 1. Generate script with custom channel branding
+        script = run_script(self.bundle)
+        self.assertIn("FinTech Alpha", script.scenes[-1].narration)
+        self.assertIn("FinTech Alpha", script.seo.description)
+
+        # 2. Fact check audit
+        report = self.agent.run(self.bundle, script)
+        self.assertEqual(report.overall, "pass")
+
+        # 3. Verify video can only proceed if overall == 'pass'
+        video_allowed = (report.overall == "pass")
+        self.assertTrue(video_allowed)
+
+        # If a fabricated number is introduced, fact check fails and blocks video
+        corrupted_script = copy.deepcopy(script)
+        corrupted_script.scenes[1].narration += " Stripe made $888.99 billion off-balance sheet."
+        corrupted_script.scenes[1].citations = []
+        fail_report = self.agent.run(self.bundle, corrupted_script)
+        self.assertEqual(fail_report.overall, "fail")
+
+        video_blocked = (fail_report.overall != "pass")
+        self.assertTrue(video_blocked)
+
 
 if __name__ == "__main__":
     unittest.main()

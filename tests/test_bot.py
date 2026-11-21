@@ -13,6 +13,7 @@ from telegram_bot.codespace import handle_codespace_command
 from telegram_bot.dispatch import dispatch_pipeline_run
 from telegram_bot.health import get_cost_summary, get_system_ping
 from telegram_bot.keys import handle_keys_command
+from config_manager import get_channel_branding
 
 
 class TestTelegramBot(unittest.TestCase):
@@ -102,6 +103,31 @@ class TestTelegramBot(unittest.TestCase):
         """Verify /codespace list and stop."""
         res = handle_codespace_command(["list"])
         self.assertIn("Codespaces", res)
+
+    def test_9_channel_and_cta_commands(self):
+        """Verify saving channel name and CTA like/subscribe options."""
+        # 1. View /channel
+        res_ch_view = handle_command(user_id=12345, command="channel", args=[])
+        self.assertIn("Current YouTube Channel Name", res_ch_view["text"])
+
+        # 2. Update /channel
+        res_ch_set = handle_command(user_id=12345, command="channel", args=["FinTech", "Decoded"])
+        self.assertIn("Channel Name Saved Successfully", res_ch_set["text"])
+        self.assertIn("FinTech Decoded", res_ch_set["text"])
+
+        # 3. View /cta
+        res_cta_view = handle_command(user_id=12345, command="cta", args=[])
+        self.assertIn("Current Call-To-Action", res_cta_view["text"])
+
+        # 4. Update /cta
+        custom_cta = "Make sure to subscribe to FinTech Decoded for institutional software breakdowns."
+        res_cta_set = handle_command(user_id=12345, command="cta", args=[custom_cta])
+        self.assertIn("Call-To-Action Saved Successfully", res_cta_set["text"])
+
+        # 5. Verify config_manager reflects changes
+        branding = get_channel_branding()
+        self.assertEqual(branding["channel_name"], "FinTech Decoded")
+        self.assertIn("subscribe to FinTech Decoded", branding["cta"]["like_subscribe"])
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from models.script import (
     ShortsScript,
     VideoScript,
 )
+from config_manager import get_channel_branding
 
 __all__ = ["ScriptAgent", "run_script", "generate_shorts"]
 
@@ -45,6 +46,15 @@ class ScriptAgent:
     def run(self, bundle: ResearchBundle) -> VideoScript:
         """Generate longform VideoScript from ResearchBundle."""
         logger.info(f"Generating VideoScript for '{bundle.topic}' (Pillar: {bundle.pillar})")
+
+        branding = get_channel_branding()
+        channel_name = branding["channel_name"]
+        cta_cfg = branding["cta"]
+        cta_outro_tpl = cta_cfg.get("outro") or "Subscribe to {channel_name} for weekly engineering deep dives into the plumbing of global finance."
+        try:
+            cta_outro = cta_outro_tpl.format(channel_name=channel_name)
+        except Exception:
+            cta_outro = cta_outro_tpl
 
         claim_ids = [s.claim_id for s in bundle.sources]
         c1 = claim_ids[0] if len(claim_ids) > 0 else "growth_rate"
@@ -206,9 +216,9 @@ class ScriptAgent:
                 section="cta",
                 narration=(
                     f"Every financial story has an architecture. Every tech story has a P and L. "
-                    f"Subscribe to TubePilot AI for weekly engineering deep dives into the plumbing of global finance."
+                    f"{cta_outro}"
                 ),
-                visual_prompt="Sleek animated call to action with TubePilot AI branding and notification bell",
+                visual_prompt=f"Sleek animated call to action with {channel_name} branding, subscribe button, and notification bell",
                 visual_type="stock",
                 duration_sec=25,
                 citations=[],
@@ -221,7 +231,7 @@ class ScriptAgent:
         # Build comprehensive 350+ word rich SEO description
         description = (
             f"{DISCLAIMER_TEXT}\n\n"
-            f"In this institutional episode of TubePilot AI, we conduct an exhaustive technical and financial post-mortem on {bundle.topic}. "
+            f"In this institutional episode of {channel_name}, we conduct an exhaustive technical and financial post-mortem on {bundle.topic}. "
             f"Our channel operates on a single core principle: every financial story has a software architecture, and every software story has a balance sheet P&L. "
             f"Here, we dismantle both sides with surgical precision.\n\n"
             f"ARCHITECTURAL DEEP DIVE:\n"
@@ -253,10 +263,10 @@ class ScriptAgent:
             f"08:45 - Conclusion & Channel Next Steps\n\n"
             f"DATA METHODOLOGY AND FACTUAL PROVENANCE:\n"
             f"All financial metrics, growth rates, margins, and market sizing citations are verified directly against official SEC EDGAR filings, "
-            f"company investor relations disclosures, and verified industry benchmarks. TubePilot AI implements automated multi-agent verification "
+            f"company investor relations disclosures, and verified industry benchmarks. {channel_name} implements automated multi-agent verification "
             f"to guarantee strict zero-hallucination factual accuracy.\n\n"
-            f"SUBSCRIBE TO TUBEPILOT AI:\n"
-            f"Join engineers, quantitative researchers, and fintech founders as we analyze the infrastructure running global commerce."
+            f"SUBSCRIBE TO {channel_name.upper()}:\n"
+            f"{cta_cfg.get('like_subscribe', 'Join engineers, quantitative researchers, and fintech founders as we analyze the infrastructure running global commerce.')}"
         )
 
         tags = [
@@ -306,6 +316,11 @@ class ScriptAgent:
     def generate_shorts(self, bundle: ResearchBundle, count: int = 3) -> List[ShortsScript]:
         """Generate 3 daily high-retention YouTube Shorts (60s max, 9:16 aspect ratio)."""
         logger.info(f"Generating {count} YouTube Shorts for '{bundle.topic}'")
+        branding = get_channel_branding()
+        channel_name = branding["channel_name"]
+        cta_cfg = branding["cta"]
+        short_subscribe_cta = cta_cfg.get("like_subscribe") or f"Follow {channel_name} for daily shorts and weekly longform breakdowns."
+
         shorts: List[ShortsScript] = []
 
         angles = [
@@ -340,8 +355,8 @@ class ScriptAgent:
                 SceneInfo(
                     id=3,
                     section="cta",
-                    narration="Check the pinned link for our complete 10-minute architecture deep dive on TubePilot AI.",
-                    visual_prompt="Vertical 9:16 call to action and logo animation",
+                    narration=f"Check the pinned link for our complete 10-minute architecture deep dive on {channel_name}.",
+                    visual_prompt=f"Vertical 9:16 call to action and {channel_name} logo animation",
                     visual_type="stock",
                     duration_sec=15,
                     citations=[],
@@ -369,9 +384,9 @@ class ScriptAgent:
                 f"DATA METHODOLOGY & FACTUAL PROVENANCE:\n"
                 f"All metrics, take rates, annual revenues, operating margins, and benchmark statistics cited in this short are extracted directly from "
                 f"public SEC EDGAR 10-K and 10-Q filings, yfinance audited statements, and verified fintech industry whitepapers. "
-                f"TubePilot AI enforces strict automated multi-agent verification gates to eliminate hallucinations and ensure institutional-grade precision.\n\n"
-                f"SUBSCRIBE TO TUBEPILOT AI:\n"
-                f"Follow our channel for daily shorts and weekly longform architectural breakdowns of global financial systems, payment networks, and enterprise software."
+                f"{channel_name} enforces strict automated multi-agent verification gates to eliminate hallucinations and ensure institutional-grade precision.\n\n"
+                f"SUBSCRIBE TO {channel_name.upper()}:\n"
+                f"{short_subscribe_cta}"
             )
 
             seo = SEOData(

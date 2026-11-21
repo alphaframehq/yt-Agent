@@ -149,6 +149,8 @@ This sets up 7 tables with **Provisioned 5 RCU / 5 WCU** and TTL attributes:
 | `/model set <STAGE> <MODEL>` | Dynamically tier models | `/model set verify gemini/gemini-2.0-flash` |
 | `/topic add <topic>` | Enqueue high-priority topic | `/topic add Plaid Financial API 2` |
 | `/topic list` | List queued topics by priority | `/topic list` |
+| `/channel [name]` | View or update YouTube channel name | `/channel FinTech Decoded` |
+| `/cta [text]` | View or update like & subscribe CTA prompt | `/cta Subscribe for weekly institutional deep-dives.` |
 | `/config view` | Display runtime parameters (budgets, thresholds) | `/config view` |
 | `/config set <KEY> <VAL>` | Update runtime config parameters | `/config set budget_ai_per_video 0.40` |
 | `/codespace list` | List active GitHub Codespaces | `/codespace list` |

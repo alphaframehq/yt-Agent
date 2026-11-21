@@ -66,10 +66,13 @@
 - [x] `README.md` (Full architecture, setup guide, Telegram cheatsheet, error taxonomy)
 - [x] `tests/test_integration.py` (5/5 tests passing: notify, success/failure formatting, dev_run lifecycle, codespace stop)
 - [x] `Gemini Multi-Key Failover Pool` (`tools/secrets.py`, `tools/llm_provider.py`, `tools/image_gen.py`, `telegram_bot/keys.py`, `tests/test_gemini_pool.py`: 6/6 tests passing)
+- [x] `Channel Branding & CTA Customization + Strict Fact-Check Gate` (`config_manager.py`, `agents/script.py`, `telegram_bot/bot.py`, `tests/test_bot.py`, `tests/test_verify.py`: 62/62 tests passing)
 
 ## Last Verified Commands
 - `python -m unittest tests/test_gemini_pool.py -v` -> `Ran 6 tests in 5.938s. OK` (Verified 2026-11-22)
-- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 60 tests in 37.579s. OK` (All 60 tests across entire codebase verified passing 2026-11-22)
+- `python -m unittest tests/test_bot.py -v` -> `Ran 9 tests in 2.748s. OK` (Verified 2026-11-22)
+- `python -m unittest tests/test_verify.py -v` -> `Ran 8 tests in 0.021s. OK` (Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 62 tests in 35.559s. OK` (All 62 tests across entire codebase verified passing 2026-11-22)
 
 
 

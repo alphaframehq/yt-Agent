@@ -21,7 +21,14 @@ import os
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
-from config_manager import get_config, reset_config, set_config
+from config_manager import (
+    get_config,
+    reset_config,
+    set_config,
+    get_channel_branding,
+    set_channel_name,
+    set_cta,
+)
 from db.dynamo import enqueue_topic, list_topics_queue, update_video_status
 from telegram_bot.codespace import handle_codespace_command
 from telegram_bot.dispatch import dispatch_pipeline_run
@@ -107,6 +114,14 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
     # 8. /config
     elif cmd == "config":
         return _handle_config_command(args)
+
+    # 8b. /channel or /channelname
+    elif cmd in ("channel", "channelname"):
+        return _handle_channel_command(args)
+
+    # 8c. /cta
+    elif cmd == "cta":
+        return _handle_cta_command(args)
 
     # 9. /cost
     elif cmd == "cost":
@@ -239,32 +254,103 @@ def _handle_topic_command(args: List[str]) -> Dict[str, Any]:
 
 def _handle_config_command(args: List[str]) -> Dict[str, Any]:
     """Subcommand handler for /config."""
+    branding = get_channel_branding()
     if not args:
         return {
             "text": (
                 "⚙️ *System Configuration:*\n"
+                f"• Channel Name: `{branding['channel_name']}`\n"
+                f"• Like/Subscribe CTA: `{branding['cta'].get('like_subscribe')}`\n"
                 f"• Pillar Split: `{get_config('pillar_split')}`\n"
                 f"• Budget Cap: `${get_config('budget_ai_per_video')} USD`\n"
                 f"• Voice: `{get_config('voice')}`\n"
                 f"• Cron Schedule: `{get_config('schedule')}`\n"
-                f"• Paused: `{get_config('paused')}`"
+                f"• Paused: `{get_config('paused')}`\n\n"
+                "_Update with:_ `/config set channel_name <Name>` or `/channel <Name>`"
             ),
             "delete_msg": False,
         }
 
     if args[0].lower() == "set" and len(args) >= 3:
         key = args[1]
-        val = args[2]
+        raw_val = " ".join(args[2:]).strip('"\'')
+
+        if key.lower() in ("channel_name", "channel"):
+            set_channel_name(raw_val)
+            return {"text": f"✅ Channel name updated: `{raw_val}`", "delete_msg": False}
+        elif key.lower() in ("cta", "cta.like_subscribe", "cta.outro"):
+            cta_sub = "like_subscribe" if "outro" not in key.lower() else "outro"
+            set_cta(raw_val, cta_type=cta_sub)
+            return {"text": f"✅ Call-to-action updated:\n`{raw_val}`", "delete_msg": False}
+
         # Type conversions
-        if val.lower() in ("true", "false"):
-            val_parsed = (val.lower() == "true")
+        if raw_val.lower() in ("true", "false"):
+            val_parsed: Any = (raw_val.lower() == "true")
         else:
             try:
-                val_parsed = float(val) if "." in val else int(val)
+                val_parsed = float(raw_val) if "." in raw_val else int(raw_val)
             except ValueError:
-                val_parsed = val
+                val_parsed = raw_val
 
         set_config(key, val_parsed)
         return {"text": f"✅ Configuration updated: `{key}` = `{val_parsed}`", "delete_msg": False}
 
     return {"text": "Usage: `/config` or `/config set <key> <val>`", "delete_msg": False}
+
+
+def _handle_channel_command(args: List[str]) -> Dict[str, Any]:
+    """Subcommand handler for /channel or /channelname."""
+    if not args:
+        branding = get_channel_branding()
+        return {
+            "text": (
+                f"📺 *Current YouTube Channel Name:* `{branding['channel_name']}`\n\n"
+                "To update, use:\n`/channel <New Channel Name>`"
+            ),
+            "delete_msg": False,
+        }
+
+    new_name = " ".join(args).strip('"\'')
+    try:
+        set_channel_name(new_name)
+        return {
+            "text": (
+                f"✅ *Channel Name Saved Successfully!*\n\n"
+                f"• New Channel Name: `{new_name}`\n"
+                "• All future scripts, descriptions, and Shorts CTAs will use this branding."
+            ),
+            "delete_msg": False,
+        }
+    except Exception as e:
+        return {"text": f"❌ Error saving channel name: {e}", "delete_msg": False}
+
+
+def _handle_cta_command(args: List[str]) -> Dict[str, Any]:
+    """Subcommand handler for /cta."""
+    branding = get_channel_branding()
+    if not args:
+        return {
+            "text": (
+                f"📣 *Current Call-To-Action (CTA):*\n\n"
+                f"• *Like & Subscribe:* `{branding['cta'].get('like_subscribe')}`\n"
+                f"• *Outro CTA:* `{branding['cta'].get('outro')}`\n\n"
+                "To update, use:\n`/cta <New Like & Subscribe text>`"
+            ),
+            "delete_msg": False,
+        }
+
+    new_cta = " ".join(args).strip('"\'')
+    try:
+        set_cta(new_cta, cta_type="like_subscribe")
+        set_cta(new_cta, cta_type="outro")
+        return {
+            "text": (
+                f"✅ *Call-To-Action Saved Successfully!*\n\n"
+                f"• New CTA: `{new_cta}`\n"
+                "• All generated longform and shorts scripts will feature this CTA."
+            ),
+            "delete_msg": False,
+        }
+    except Exception as e:
+        return {"text": f"❌ Error saving CTA: {e}", "delete_msg": False}
+
