@@ -92,24 +92,35 @@ def _get_table() -> Any:
 # ---------------------------------------------------------------------------
 
 
+_cached_fernet_master: str | None = None
+_cached_fernet_key: bytes | None = None
+
+
 def _derive_fernet_key() -> bytes:
     """Derive a 32-byte Fernet key from ``MASTER_SECRET`` env var.
 
     Raises:
         RuntimeError: If ``MASTER_SECRET`` is not set.
     """
+    global _cached_fernet_master, _cached_fernet_key
     master = os.environ.get("MASTER_SECRET")
     if not master:
         raise RuntimeError(
             "MASTER_SECRET env var is required for secrets encryption"
         )
+    if _cached_fernet_key is not None and _cached_fernet_master == master:
+        return _cached_fernet_key
+
     kdf = PBKDF2HMAC(
         algorithm=SHA256(),
         length=32,
         salt=_SALT,
         iterations=_PBKDF2_ITERATIONS,
     )
-    return base64.urlsafe_b64encode(kdf.derive(master.encode()))
+    _cached_fernet_key = base64.urlsafe_b64encode(kdf.derive(master.encode()))
+    _cached_fernet_master = master
+    return _cached_fernet_key
+
 
 
 def _fernet() -> Fernet:
@@ -182,6 +193,25 @@ def _validate_secret(name: str, value: str) -> None:
     Raises:
         ValueError: When a rule is violated.
     """
+    if name.startswith("GEMINI_KEY"):
+        if name == "GEMINI_KEY_POOL":
+            for part in value.split(","):
+                part = part.strip()
+                if part and (not part.startswith("AIza") or len(part) < 20):
+                    raise ValueError(
+                        f"Every key in GEMINI_KEY_POOL must start with 'AIza' and be >= 20 characters"
+                    )
+            return
+        if not value.startswith("AIza"):
+            raise ValueError(
+                f"{name} must start with 'AIza' (got '{value[:len('AIza')]}')"
+            )
+        if len(value) < 20:
+            raise ValueError(
+                f"{name} must be at least 20 characters (got {len(value)})"
+            )
+        return
+
     rules = _VALIDATION_RULES.get(name)
     if rules is None:
         return  # no rules for this key
@@ -199,6 +229,7 @@ def _validate_secret(name: str, value: str) -> None:
         )
 
 
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -213,7 +244,16 @@ __all__ = [
     "rotate_secret",
     "export_secrets",
     "import_secrets",
+    # Gemini Key Pool API
+    "get_gemini_pool_keys",
+    "get_active_gemini_key",
+    "mark_gemini_key_failed",
+    "add_gemini_pool_key",
+    "get_gemini_pool_status",
+    "rotate_gemini_key",
+    "reset_gemini_pool",
 ]
+
 
 
 def mask_secret(value: str) -> str:
@@ -476,3 +516,229 @@ def import_secrets(b64_data: str) -> None:
     secrets.update(incoming)
     _save_secrets_record(secrets)
     logger.info("Imported {} secret(s)", len(incoming))
+
+
+# ---------------------------------------------------------------------------
+# Gemini API Key Pool Management
+# ---------------------------------------------------------------------------
+
+_gemini_cooldowns: dict[str, float] = {}  # {key_string: cooldown_expiry_timestamp}
+_gemini_active_idx: int = 0
+
+
+def reset_gemini_pool() -> None:
+    """Reset pool index and clear cooldowns (useful for tests or refresh)."""
+    global _gemini_active_idx, _gemini_cooldowns
+    _gemini_active_idx = 0
+    _gemini_cooldowns.clear()
+
+
+def get_gemini_pool_keys() -> list[str]:
+    """Discover all configured Gemini API keys from DynamoDB, config, and environment.
+
+    Scans:
+    1. GEMINI_KEY (primary default)
+    2. GEMINI_KEY_POOL (comma-separated or JSON list of keys)
+    3. GEMINI_KEY_1 .. GEMINI_KEY_20 (indexed standby keys in record)
+    4. Corresponding environment variables
+
+    Returns:
+        Deduplicated list of decrypted Gemini API keys in natural index order.
+    """
+    keys: list[str] = []
+
+    # 1. Primary key
+    primary = get_secret("GEMINI_KEY")
+    if primary and primary.startswith("AIza"):
+        keys.append(primary)
+
+    # 2. Key pool string (comma-separated or JSON list)
+    pool_str = get_secret("GEMINI_KEY_POOL")
+    if pool_str:
+        try:
+            parsed = json.loads(pool_str)
+            if isinstance(parsed, list):
+                for k in parsed:
+                    if isinstance(k, str) and k.startswith("AIza") and k not in keys:
+                        keys.append(k)
+        except Exception:
+            for part in pool_str.split(","):
+                k = part.strip()
+                if k.startswith("AIza") and k not in keys:
+                    keys.append(k)
+
+    # 3. Read directly from loaded secrets record for fast O(1) indexed lookup
+    all_secrets = _load_secrets_record()
+    indexed_names = sorted(
+        [
+            n
+            for n in all_secrets
+            if n.startswith("GEMINI_KEY_") and not n.startswith("GEMINI_KEY__archived")
+        ],
+        key=lambda n: int(n.split("_")[-1]) if n.split("_")[-1].isdigit() else 999,
+    )
+    for name in indexed_names:
+        token = all_secrets[name]
+        try:
+            decrypted = _decrypt(token)
+            if decrypted.startswith("AIza") and decrypted not in keys:
+                keys.append(decrypted)
+        except Exception:
+            pass
+
+    # 4. Check environment variables
+    for env_name in sorted(os.environ.keys()):
+        if env_name.startswith("GEMINI_KEY_"):
+            env_val = os.environ[env_name]
+            if env_val.startswith("AIza") and env_val not in keys:
+                keys.append(env_val)
+
+    return keys
+
+
+def get_active_gemini_key() -> Optional[str]:
+    """Retrieve the current active Gemini key, avoiding keys currently in cooldown.
+
+    Returns:
+        Active API key string, or None if no keys exist.
+    """
+    global _gemini_active_idx
+    keys = get_gemini_pool_keys()
+    if not keys:
+        return get_secret("GEMINI_KEY")
+
+    now = time.time()
+    healthy_keys = [k for k in keys if _gemini_cooldowns.get(k, 0.0) <= now]
+
+    if healthy_keys:
+        if _gemini_active_idx >= len(healthy_keys):
+            _gemini_active_idx = 0
+        return healthy_keys[_gemini_active_idx]
+
+    # If all keys are in cooldown, pick the one with the soonest expiring cooldown
+    keys_by_expiry = sorted(keys, key=lambda k: _gemini_cooldowns.get(k, 0.0))
+    return keys_by_expiry[0]
+
+
+def mark_gemini_key_failed(
+    key: str, error_status: int = 429, cooldown_sec: float | None = None
+) -> Optional[str]:
+    """Mark a Gemini key as rate-limited or failed, applying a cooldown and rotating.
+
+    Args:
+        key: The key string that failed
+        error_status: HTTP status (429 rate limit, 403 quota/forbidden, 401 invalid)
+        cooldown_sec: Optional custom cooldown in seconds. Defaults: 60s for 429, 3600s for 401/403.
+
+    Returns:
+        The next healthy active key, or None.
+    """
+    global _gemini_active_idx
+    if cooldown_sec is None:
+        if error_status == 429:
+            cooldown_sec = 60.0  # 1 min cooldown for rate limits
+        elif error_status in (401, 403):
+            cooldown_sec = 3600.0  # 1 hour cooldown for quota or auth errors
+        else:
+            cooldown_sec = 30.0
+
+    _gemini_cooldowns[key] = time.time() + cooldown_sec
+    logger.warning(
+        f"Gemini API key [{mask_secret(key)}] put into cooldown for {cooldown_sec:.0f}s (status {error_status})"
+    )
+
+    keys = get_gemini_pool_keys()
+    now = time.time()
+    healthy = [k for k in keys if _gemini_cooldowns.get(k, 0.0) <= now]
+    if healthy:
+        next_key = healthy[0]
+        _gemini_active_idx = 0
+        logger.info(f"Gemini key pool rotated active key -> [{mask_secret(next_key)}]")
+        return next_key
+
+    # If all in cooldown, pick soonest expiring
+    keys_by_expiry = sorted(keys, key=lambda k: _gemini_cooldowns.get(k, 0.0))
+    return keys_by_expiry[0] if keys_by_expiry else None
+
+
+def rotate_gemini_key() -> Optional[str]:
+    """Manually rotate to the next key in the pool."""
+    global _gemini_active_idx
+    keys = get_gemini_pool_keys()
+    if not keys:
+        return None
+    now = time.time()
+    healthy = [k for k in keys if _gemini_cooldowns.get(k, 0.0) <= now] or keys
+    _gemini_active_idx = (_gemini_active_idx + 1) % len(healthy)
+    next_key = healthy[_gemini_active_idx]
+    logger.info(f"Gemini key pool manually rotated to: [{mask_secret(next_key or '')}]")
+    return next_key
+
+
+def add_gemini_pool_key(key: str) -> str:
+    """Validate and add a new Gemini API key to the key pool in DynamoDB.
+
+    Args:
+        key: Raw Gemini API key (must start with 'AIza')
+
+    Returns:
+        The secret name assigned, e.g. 'GEMINI_KEY_2'
+    """
+    key = key.strip()
+    if not key.startswith("AIza") or len(key) < 20:
+        raise ValueError("Invalid Gemini API key format (must start with 'AIza' and be >= 20 chars)")
+
+    existing_keys = get_gemini_pool_keys()
+    if key in existing_keys:
+        logger.info(f"Key [{mask_secret(key)}] is already present in Gemini pool.")
+        if get_secret("GEMINI_KEY") == key:
+            return "GEMINI_KEY"
+        for i in range(1, 21):
+            if get_secret(f"GEMINI_KEY_{i}") == key:
+                return f"GEMINI_KEY_{i}"
+
+    # If GEMINI_KEY is not set yet, store as primary
+    if not get_secret("GEMINI_KEY"):
+        target_name = "GEMINI_KEY"
+    else:
+        idx = 1
+        while get_secret(f"GEMINI_KEY_{idx}") is not None:
+            idx += 1
+        target_name = f"GEMINI_KEY_{idx}"
+
+    set_secret(target_name, key)
+    logger.info(f"Added new Gemini key to pool as '{target_name}' [{mask_secret(key)}]")
+    return target_name
+
+
+def get_gemini_pool_status() -> list[dict[str, Any]]:
+    """Return diagnostic status information for all keys in the Gemini pool."""
+    keys = get_gemini_pool_keys()
+    active_key = get_active_gemini_key()
+    now = time.time()
+
+    status_list = []
+    for idx, k in enumerate(keys):
+        cooldown_exp = _gemini_cooldowns.get(k, 0.0)
+        in_cooldown = cooldown_exp > now
+        remaining = round(cooldown_exp - now, 1) if in_cooldown else 0.0
+
+        secret_name = "GEMINI_KEY"
+        if get_secret("GEMINI_KEY") != k:
+            for i in range(1, 21):
+                if get_secret(f"GEMINI_KEY_{i}") == k:
+                    secret_name = f"GEMINI_KEY_{i}"
+                    break
+
+        status_list.append({
+            "index": idx + 1,
+            "name": secret_name,
+            "masked": mask_secret(k),
+            "is_active": (k == active_key),
+            "status": "cooldown" if in_cooldown else "healthy",
+            "cooldown_remaining_sec": remaining,
+        })
+
+    return status_list
+
+

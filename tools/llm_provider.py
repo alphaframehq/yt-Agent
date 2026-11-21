@@ -19,7 +19,12 @@ from tenacity import (
     wait_exponential,
 )
 
-from tools.secrets import get_secret
+from tools.secrets import (
+    get_secret,
+    get_gemini_pool_keys,
+    mark_gemini_key_failed,
+    mask_secret,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -122,20 +127,18 @@ class LLMProvider:
         schema: Optional[Type[T]] = None,
         temperature: float = 0.2,
     ) -> LLMResponse:
-        """Call Google Gemini API."""
-        api_key = get_secret("GEMINI_KEY")
-        if not api_key:
+        """Call Google Gemini API with automatic key pool failover on rate-limits (429) or quota errors."""
+        keys = get_gemini_pool_keys()
+        if not keys:
             # Fallback mock for testing/offline
-            logger.warning("GEMINI_KEY not configured. Returning fallback mock response.")
+            logger.warning("No GEMINI_KEY configured. Returning fallback mock response.")
             return LLMResponse(
                 content="{}",
                 provider="gemini",
                 model=self.model,
             )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={api_key}"
         headers = {"Content-Type": "application/json"}
-        
         payload: Dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
             "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -147,23 +150,54 @@ class LLMProvider:
         if schema is not None:
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            text = ""
-            candidates = data.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    text = parts[0].get("text", "")
+        last_err: Optional[Exception] = None
+        for idx, api_key in enumerate(keys):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={api_key}"
+            try:
+                with httpx.Client(timeout=60.0) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+                    if resp.status_code == 429:
+                        logger.warning(
+                            f"Gemini key [{mask_secret(api_key)}] hit 429 Rate Limit. "
+                            f"Failing over to next key in pool ({idx + 1}/{len(keys)})..."
+                        )
+                        mark_gemini_key_failed(api_key, error_status=429, cooldown_sec=60.0)
+                        last_err = httpx.HTTPStatusError("429 Rate Limit", request=resp.request, response=resp)
+                        continue
+                    elif resp.status_code in (401, 403):
+                        logger.warning(
+                            f"Gemini key [{mask_secret(api_key)}] failed with HTTP {resp.status_code}. "
+                            f"Failing over to next key in pool ({idx + 1}/{len(keys)})..."
+                        )
+                        mark_gemini_key_failed(api_key, error_status=resp.status_code, cooldown_sec=3600.0)
+                        last_err = httpx.HTTPStatusError(f"HTTP {resp.status_code}", request=resp.request, response=resp)
+                        continue
 
-            return LLMResponse(
-                content=text,
-                provider="gemini",
-                model=self.model,
-            )
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                    text = ""
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            text = parts[0].get("text", "")
+
+                    return LLMResponse(
+                        content=text,
+                        provider="gemini",
+                        model=self.model,
+                    )
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                logger.warning(f"Gemini request failed using key [{mask_secret(api_key)}]: {exc}")
+                mark_gemini_key_failed(api_key, error_status=getattr(getattr(exc, 'response', None), 'status_code', 500))
+                last_err = exc
+                continue
+
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("All Gemini API keys in pool failed.")
+
 
     def _call_bedrock(
         self,

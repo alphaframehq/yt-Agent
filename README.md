@@ -144,6 +144,7 @@ This sets up 7 tables with **Provisioned 5 RCU / 5 WCU** and TTL attributes:
 | `/resume` | Unpause automated daily runs | `/resume` |
 | `/keys list` | List all secrets (masked: `AIzaSy...6789`) | `/keys list` |
 | `/keys set <KEY> <VAL>` | Hot-swap encrypted key without redeploy (auto-delete requested) | `/keys set GEMINI_KEY AIzaSy...` |
+| `/keys pool [list\|add\|rotate]` | Manage Gemini multi-key failover pool (auto-switch on 429) | `/keys pool add gemini AIzaSy...` |
 | `/model list` | Show active models for research, script, verify | `/model list` |
 | `/model set <STAGE> <MODEL>` | Dynamically tier models | `/model set verify gemini/gemini-2.0-flash` |
 | `/topic add <topic>` | Enqueue high-priority topic | `/topic add Plaid Financial API 2` |
@@ -183,12 +184,23 @@ The pipeline implements autonomous classification and recovery for 7 error class
 
 ---
 
+## 💎 Gemini Multi-Key Failover Pool
+
+Google AI Studio's free tier provides generous limits (15 RPM / 1,500 RPD), but heavy pipelines (script generation, Imagen 3 graphics, and verification) can experience temporary rate limits. TubePilot AI includes a transparent multi-key failover pool:
+
+- **Key Sources:** Reads `GEMINI_KEY`, `GEMINI_KEY_POOL` (comma/JSON list), and indexed `GEMINI_KEY_1`..`GEMINI_KEY_20`.
+- **Automatic Rotation on HTTP 429:** When a key hits a rate limit, it is placed into a timed cooldown (60s) and the request immediately retries with the next healthy key in the pool.
+- **Quota & Auth Failover:** Keys returning HTTP 401 or 403 enter a 1-hour cooldown.
+- **Bot Management:** Check status with `/keys pool list`, hot-add keys with `/keys pool add gemini <API_KEY>`, or manually rotate with `/keys pool rotate gemini`.
+
+---
+
 ## 🧪 Running Tests
 
-TubePilot AI includes 54 comprehensive unit, pipeline, and integration tests with zero external dependency requirements (all cloud APIs feature robust in-memory mock fallbacks):
+TubePilot AI includes 60 comprehensive unit, pipeline, and integration tests with zero external dependency requirements (all cloud APIs feature robust in-memory mock fallbacks):
 
 ```bash
-# Run full 54-test suite
+# Run full 60-test suite
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
@@ -202,6 +214,8 @@ Test breakdown:
 - `tests/test_storage_uploader.py`: 7 tests (DynamoDB CRUD, TTL, ephemeral disk purge, uploader agent)
 - `tests/test_bot.py`: 8 tests (Telegram commands, key hot-swapping, security masking, Codespace shutdown)
 - `tests/test_integration.py`: 5 tests (End-to-end dev_run runner, notifications, Codespace hooks)
+- `tests/test_gemini_pool.py`: 6 tests (Gemini multi-key discovery, 429 failover, Imagen 3 retry, Telegram pool management)
+
 
 ---
 

@@ -26,6 +26,9 @@ from tools.secrets import (
     rotate_secret,
     set_secret,
     test_secret,
+    get_gemini_pool_status,
+    add_gemini_pool_key,
+    rotate_gemini_key,
 )
 
 __all__ = [
@@ -44,6 +47,7 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
                 "• `/keys set NAME VALUE` - Set key (auto-deletes msg)\n"
                 "• `/keys test NAME|all` - Test connectivity\n"
                 "• `/keys rotate NAME NEW_VAL` - Rotate key\n"
+                "• `/keys pool list|add|rotate` - Manage Gemini multi-key failover pool\n"
                 "• `/keys delete NAME` - Delete secret\n"
                 "• `/keys export` - Backup keys (base64)\n"
                 "• `/keys import <b64>` - Restore backup"
@@ -113,6 +117,58 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
             }
         except Exception as e:
             return {"text": f"❌ Rotation Failed: {e}", "delete_caller_msg": True}
+
+    # /keys pool [list|add|rotate]
+    elif subcmd == "pool":
+        pool_action = args[1].lower() if len(args) > 1 else "list"
+
+        if pool_action in ("list", "gemini"):
+            status_list = get_gemini_pool_status()
+            if not status_list:
+                return {
+                    "text": "💎 *Gemini API Key Pool:* Empty. Add keys using `/keys pool add gemini <API_KEY>`.",
+                    "delete_caller_msg": False,
+                }
+            lines = [f"💎 *Gemini API Key Pool ({len(status_list)} keys configured):*"]
+            for item in status_list:
+                state_badge = "🟢 ACTIVE" if item["is_active"] else "⚪ STANDBY"
+                health_badge = "Healthy"
+                if item["status"] == "cooldown":
+                    health_badge = f"⚠️ Cooldown ({item['cooldown_remaining_sec']}s left)"
+                lines.append(f"• #{item['index']} `{item['name']}`: `{item['masked']}` [{state_badge} — {health_badge}]")
+            lines.append("\n_Keys automatically failover on HTTP 429 rate limits or quota exhaustion._")
+            return {"text": "\n".join(lines), "delete_caller_msg": False}
+
+        elif pool_action == "add":
+            if len(args) < 3 or (len(args) >= 3 and args[2].lower() == "gemini" and len(args) < 4):
+                return {"text": "❌ Usage: `/keys pool add gemini <API_KEY>`", "delete_caller_msg": True}
+
+            raw_key = args[3].strip() if args[2].lower() == "gemini" else args[2].strip()
+            try:
+                assigned_name = add_gemini_pool_key(raw_key)
+                live_ok = test_secret(assigned_name)
+                test_str = "✅ (Live test passed)" if live_ok else "⚠️ (Saved, connectivity check pending)"
+                return {
+                    "text": f"💎 Added Gemini API key to pool as `{assigned_name}`.\nStatus: {test_str}\nMasked: `{mask_secret(raw_key)}`",
+                    "delete_caller_msg": True,
+                }
+            except ValueError as ve:
+                return {"text": f"❌ Validation Error: {ve}", "delete_caller_msg": True}
+
+        elif pool_action == "rotate":
+            next_k = rotate_gemini_key()
+            if next_k:
+                return {
+                    "text": f"🔄 Manually rotated Gemini pool to next key: `{mask_secret(next_k)}`",
+                    "delete_caller_msg": False,
+                }
+            else:
+                return {"text": "⚠️ Gemini pool has no available keys to rotate.", "delete_caller_msg": False}
+
+        return {
+            "text": "Usage: `/keys pool list` or `/keys pool add gemini <KEY>` or `/keys pool rotate gemini`",
+            "delete_caller_msg": False,
+        }
 
     # /keys delete NAME
     elif subcmd == "delete":

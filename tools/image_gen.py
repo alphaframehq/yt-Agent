@@ -20,7 +20,12 @@ import httpx
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from tools.secrets import get_secret
+from tools.secrets import (
+    get_secret,
+    get_gemini_pool_keys,
+    mark_gemini_key_failed,
+    mask_secret,
+)
 
 __all__ = [
     "generate_image",
@@ -84,12 +89,11 @@ def generate_image(
 
 
 def _generate_imagen3(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") -> Path:
-    """Call Google Gemini Imagen 3 API."""
-    api_key = get_secret("GEMINI_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_KEY not set")
+    """Call Google Gemini Imagen 3 API with key pool failover."""
+    keys = get_gemini_pool_keys()
+    if not keys:
+        raise ValueError("GEMINI_KEY not set in pool")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={api_key}"
     payload = {
         "instances": [{"prompt": prompt}],
         "parameters": {
@@ -99,18 +103,49 @@ def _generate_imagen3(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") 
         },
     }
 
-    with httpx.Client(timeout=45.0) as client:
-        resp = client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        predictions = data.get("predictions", [])
-        if not predictions:
-            raise RuntimeError("No predictions returned from Imagen 3")
+    last_err: Optional[Exception] = None
+    for idx, api_key in enumerate(keys):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={api_key}"
+        try:
+            with httpx.Client(timeout=45.0) as client:
+                resp = client.post(url, json=payload)
+                if resp.status_code == 429:
+                    logger.warning(
+                        f"Imagen 3 key [{mask_secret(api_key)}] hit 429 Rate Limit. "
+                        f"Rotating to next key in pool ({idx + 1}/{len(keys)})..."
+                    )
+                    mark_gemini_key_failed(api_key, error_status=429, cooldown_sec=60.0)
+                    last_err = httpx.HTTPStatusError("429 Rate Limit", request=resp.request, response=resp)
+                    continue
+                elif resp.status_code in (401, 403):
+                    logger.warning(
+                        f"Imagen 3 key [{mask_secret(api_key)}] failed with HTTP {resp.status_code}. "
+                        f"Rotating to next key in pool ({idx + 1}/{len(keys)})..."
+                    )
+                    mark_gemini_key_failed(api_key, error_status=resp.status_code, cooldown_sec=3600.0)
+                    last_err = httpx.HTTPStatusError(f"HTTP {resp.status_code}", request=resp.request, response=resp)
+                    continue
 
-        b64_img = predictions[0].get("bytesBase64Encoded")
-        img_bytes = base64.b64decode(b64_img)
-        dest_path.write_bytes(img_bytes)
-        return dest_path
+                resp.raise_for_status()
+                data = resp.json()
+                predictions = data.get("predictions", [])
+                if not predictions:
+                    raise RuntimeError("No predictions returned from Imagen 3")
+
+                b64_img = predictions[0].get("bytesBase64Encoded")
+                img_bytes = base64.b64decode(b64_img)
+                dest_path.write_bytes(img_bytes)
+                return dest_path
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            logger.warning(f"Imagen 3 request failed with key [{mask_secret(api_key)}]: {exc}")
+            mark_gemini_key_failed(api_key, error_status=getattr(getattr(exc, 'response', None), 'status_code', 500))
+            last_err = exc
+            continue
+
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("All Gemini API keys in pool failed for Imagen 3.")
+
 
 
 def _generate_gemini_native(prompt: str, dest_path: Path) -> Path:

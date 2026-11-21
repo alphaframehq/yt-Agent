@@ -65,11 +65,12 @@
 - [x] `.devcontainer/devcontainer.json` (Python 3.11, AWS CLI, gh CLI, auto-stop on 10 min idle)
 - [x] `README.md` (Full architecture, setup guide, Telegram cheatsheet, error taxonomy)
 - [x] `tests/test_integration.py` (5/5 tests passing: notify, success/failure formatting, dev_run lifecycle, codespace stop)
+- [x] `Gemini Multi-Key Failover Pool` (`tools/secrets.py`, `tools/llm_provider.py`, `tools/image_gen.py`, `telegram_bot/keys.py`, `tests/test_gemini_pool.py`: 6/6 tests passing)
 
 ## Last Verified Commands
-- `python -m unittest tests/test_bot.py -v` -> `Ran 8 tests in 3.899s. OK` (Verified 2026-11-22)
-- `python -m unittest tests/test_integration.py -v` -> `Ran 5 tests in 1.431s. OK` (Verified 2026-11-22)
-- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 54 tests in 24.120s. OK` (All 54 tests across all 8 Phases verified passing 2026-11-22)
+- `python -m unittest tests/test_gemini_pool.py -v` -> `Ran 6 tests in 5.938s. OK` (Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 60 tests in 37.579s. OK` (All 60 tests across entire codebase verified passing 2026-11-22)
+
 
 
 ## Open Issues

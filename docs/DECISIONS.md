@@ -24,3 +24,7 @@ Bot handles key hot-swapping through encrypted Fernet PBKDF2 without application
 ## D-008: Automated Codespace Shutdown
 To prevent idle compute billing when running inside GitHub Codespaces, `scripts/dev_run.py` explicitly invokes `gh codespace stop` within a `finally` block unless `--no-stop` is passed. `.devcontainer/devcontainer.json` also configures `shutdownAction: stopContainer`.
 
+## D-009: Gemini Multi-Key Failover Pool
+To maximize uptime on the Google AI Studio free tier (15 RPM / 1,500 RPD) without unexpected failure or cost, TubePilot AI implements a multi-key pool for Gemini. Keys can be registered under `GEMINI_KEY`, `GEMINI_KEY_POOL`, or indexed `GEMINI_KEY_1`..`GEMINI_KEY_20`. On HTTP 429 (rate-limit) or 401/403 (quota/revocation), the failing key enters a timed cooldown (60s for 429, 3600s for 401/403) and the system automatically fails over to the next healthy standby key in the pool across both LLM prompts (`tools/llm_provider.py`) and Imagen 3 asset generation (`tools/image_gen.py`). Telegram control plane supports `/keys pool list|add|rotate`.
+
+
