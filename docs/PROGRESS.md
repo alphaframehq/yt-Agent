@@ -29,18 +29,19 @@
 ## Phase 4: LangGraph Orchestration & Self-Healing
 - [x] `orchestration/graph.py` (State machine: research -> script -> verify -> [fix loop max 3] -> finalize / human_review)
 - [x] `pipeline.py` (`run_stage` wrapper with autonomous error classification, backoff, and healing)
-- [x] `workflow/errors.py` (7 error classes taxonomy: TRANSIENT, PROVIDER_DOWN, INVALID_KEY, QUOTA_EXCEEDED, SCHEMA_FAIL, CONTENT_FAIL, FATAL)
+- [x] `workflow/errors.py` (7 error classes taxonomy)
 - [x] `workflow/healer.py` (Autonomous healing actions: retry_same, switch_provider, switch_key, reschedule_next_day, re_prompt, abort)
 - [x] `tests/test_healer.py` (6/6 mandatory tests passing in 0.003s)
 - [x] `tests/test_graph.py` (4/4 tests passing: happy path, fix loop, human review escalation, self-healing retry)
 
-## Phase 5: Media Pipeline (Charts + TTS + Assembly) (Next)
-- [ ] agents/charts.py (8 branded chart types)
-- [ ] agents/tts.py (Polly Neural synthesis)
-- [ ] agents/visuals.py (Budget-aware visual routing)
-- [ ] agents/assemble.py (MoviePy + faster-whisper subtitles)
+## Phase 5: Media Pipeline (Charts + TTS + Visuals + Assembly)
+- [x] `agents/charts.py` (8 branded institutional chart types: revenue_trend, segment_breakdown, margin_compare, unit_economics_waterfall, scope_tam, competitor_matrix, growth_margin_scatter, market_share_donut)
+- [x] `agents/tts.py` (Polly Neural synthesis, duration alignment back into scene model)
+- [x] `agents/visuals.py` (Budget-aware visual asset routing, $0.30/video cap enforcement)
+- [x] `agents/assemble.py` (MoviePy + FFmpeg compositor, subtitle burn-in, Longform 16:9 + Shorts 9:16)
+- [x] `tests/test_media.py` (6/6 tests passing, sample chart verified)
 
-## Phase 6: Upload & Ephemeral Storage
+## Phase 6: Upload & Ephemeral Storage (Next)
 - [ ] agents/uploader.py (Private upload, thumbnail, DynamoDB update, local purge)
 - [ ] db/setup_dynamo.py (7 tables, provisioned 5 RCU/WCU, GSI, TTL)
 - [ ] db/dynamo.py (CRUD helpers)
@@ -62,9 +63,8 @@
 
 ## Last Verified Commands
 - `python -c "import sys; sys.path.insert(0, 'c:/Users/balra/alphaframehq/yt-agent'); from models import *; from config_manager import get_config, set_config, snapshot_config, reset_config; from tools.secrets import get_secret, mask_secret; print('ALL PHASE 1 IMPORTS SUCCEEDED!')"` -> `ALL PHASE 1 IMPORTS SUCCEEDED!` (Verified 2026-11-22)
-- `python -m unittest tests/test_healer.py -v` -> `Ran 6 tests in 0.003s. OK` (Verified 2026-11-22)
-- `python -m unittest tests/test_graph.py -v` -> `Ran 4 tests in 15.217s. OK` (Verified 2026-11-22)
-- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 28 tests in 19.425s. OK` (All 28 tests across Phases 1-4 verified passing 2026-11-22)
+- `python -m unittest tests/test_media.py -v` -> `Ran 6 tests in 2.515s. OK` (Sample chart verified: `cache/charts/stub_revenue_trend.png`, 4947 bytes, Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 34 tests in 28.632s. OK` (All 34 tests across Phases 1-5 verified passing 2026-11-22)
 
 ## Open Issues
 (none)
