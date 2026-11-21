@@ -19,13 +19,14 @@
 - [x] `tools/polly.py` (AWS Polly Neural / Standard TTS, SSML prosody, duration detection)
 - [x] `tests/test_tools.py` (9/9 unit tests passing)
 
-## Phase 3: AI Agents (Research, Script, Verification) (Next)
-- [ ] agents/research.py & prompts/research_agent.txt
-- [ ] agents/script.py & prompts/script_*.txt (Longform + Shorts)
-- [ ] agents/verify.py & prompts/verify_*.txt (7 deterministic + 2 LLM checks)
-- [ ] tests/test_verify.py (7 mandatory test suites)
+## Phase 3: AI Agents (Research, Script, Verification)
+- [x] `agents/research.py` & `prompts/research_agent.txt` (Multi-source research with deterministic provenance)
+- [x] `agents/script.py` & `prompts/script_*.txt` (Longform 8+ charts + 3 daily Shorts)
+- [x] `agents/verify.py` & `prompts/verify_*.txt` (7 deterministic <1s checks + 2 LLM semantic checks)
+- [x] `tests/test_research.py` (2/2 tests passing)
+- [x] `tests/test_verify.py` (7/7 mandatory tests passing with sub-second deterministic checks: 0-14ms)
 
-## Phase 4: LangGraph Orchestration & Self-Healing
+## Phase 4: LangGraph Orchestration & Self-Healing (Next)
 - [ ] orchestration/graph.py
 - [ ] pipeline.py
 - [ ] workflow/errors.py (7 error classes taxonomy)
@@ -60,7 +61,7 @@
 
 ## Last Verified Commands
 - `python -c "import sys; sys.path.insert(0, 'c:/Users/balra/alphaframehq/yt-agent'); from models import *; from config_manager import get_config, set_config, snapshot_config, reset_config; from tools.secrets import get_secret, mask_secret; print('ALL PHASE 1 IMPORTS SUCCEEDED!')"` -> `ALL PHASE 1 IMPORTS SUCCEEDED!` (Verified 2026-11-22)
-- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 9 tests in 9.594s. OK` (Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 18 tests in 6.476s. OK` (All Phase 1, Phase 2, and Phase 3 tests verified passing 2026-11-22)
 
 ## Open Issues
 (none)
