@@ -17,3 +17,6 @@ All services use free tier except optional Gemini (~$0.30/month for verification
 
 ## D-006: Shorts Pipeline
 Shorts reuse the same research bundle as the long-form video. 3 shorts per daily run, each 60 sec max, 9:16 aspect ratio.
+
+## D-007: Telegram Hot-Swapping & In-Memory Fallback
+Bot handles key hot-swapping through encrypted Fernet PBKDF2 without application restarts. All `/keys set` commands request 30-second user deletion. When DynamoDB is offline (local development/unit tests), an in-memory fallback cache securely stores values for the lifetime of the process.

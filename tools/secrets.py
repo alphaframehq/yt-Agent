@@ -132,29 +132,36 @@ def _decrypt(token: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_in_memory_secrets: dict[str, str] = {}
+
+
 def _load_secrets_record() -> dict[str, str]:
     """Load the encrypted secrets record from DynamoDB.
 
-    Returns an empty dict when DynamoDB is unavailable or the record
-    does not exist.
+    Returns in-memory fallback dict when DynamoDB is unavailable.
     """
     table = _get_table()
     if table is None:
-        return {}
+        return dict(_in_memory_secrets)
     try:
         resp = table.get_item(Key={"config_id": _SECRETS_ID})
         item = resp.get("Item", {})
-        return {k: v for k, v in item.items() if k != "config_id"}
+        data = {k: v for k, v in item.items() if k != "config_id"}
+        if data:
+            _in_memory_secrets.update(data)
+        return data or dict(_in_memory_secrets)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to load secrets from DynamoDB: {}", exc)
-        return {}
+        return dict(_in_memory_secrets)
 
 
 def _save_secrets_record(secrets: dict[str, str]) -> None:
-    """Write the full encrypted secrets record to DynamoDB."""
+    """Write the full encrypted secrets record to DynamoDB and in-memory cache."""
+    global _in_memory_secrets
+    _in_memory_secrets = dict(secrets)
     table = _get_table()
     if table is None:
-        logger.warning("DynamoDB unavailable — secrets not persisted remotely")
+        logger.warning("DynamoDB unavailable — secrets persisted in-memory only")
         return
     try:
         item = {"config_id": _SECRETS_ID, **secrets}

@@ -48,14 +48,15 @@
 - [x] `storage/ephemeral.py` (4 cleanup layers: atexit, S3 lifecycle, DynamoDB TTL, startup defensive sweep)
 - [x] `tests/test_storage_uploader.py` (7/7 tests passing)
 
-## Phase 7: Telegram Bot & Control Plane (Next)
-- [ ] telegram_bot/bot.py & command handlers
-- [ ] telegram_bot/keys.py
-- [ ] telegram_bot/health.py
-- [ ] telegram_bot/codespace.py
-- [ ] telegram_bot/dispatch.py
+## Phase 7: Telegram Bot & Control Plane
+- [x] `telegram_bot/bot.py` & command handlers (/ping, /run, /status, /pause, /resume, /keys, /model, /topic, /config, /codespace, and 5 interactive callbacks)
+- [x] `telegram_bot/keys.py` (Hot-swapping encrypted keys, masking security, auto-delete instruction)
+- [x] `telegram_bot/health.py` (Sub-5s health check, latency measurement, API diagnostics, daily budget spend)
+- [x] `telegram_bot/codespace.py` (GitHub Codespaces inspection and immediate kill switch)
+- [x] `telegram_bot/dispatch.py` (GitHub Actions workflow dispatch trigger + local topic queueing)
+- [x] `tests/test_bot.py` (8/8 unit tests passing)
 
-## Phase 8: CI/CD, Docs & Final Integration
+## Phase 8: CI/CD, Docs & Final Integration (Next)
 - [ ] scripts/notify.py, notify_failure.py, notify_success.py, dev_run.py
 - [ ] .github/workflows/daily.yml
 - [ ] .devcontainer/devcontainer.json
@@ -63,9 +64,8 @@
 - [ ] Final integration tests
 
 ## Last Verified Commands
-- `python -c "import sys; sys.path.insert(0, 'c:/Users/balra/alphaframehq/yt-agent'); from models import *; from config_manager import get_config, set_config, snapshot_config, reset_config; from tools.secrets import get_secret, mask_secret; print('ALL PHASE 1 IMPORTS SUCCEEDED!')"` -> `ALL PHASE 1 IMPORTS SUCCEEDED!` (Verified 2026-11-22)
-- `python -m unittest tests/test_storage_uploader.py -v` -> `Ran 7 tests in 11.577s. OK` (Verified 2026-11-22)
-- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 41 tests in 38.370s. OK` (All 41 tests across Phases 1-6 verified passing 2026-11-22)
+- `python -m unittest tests/test_bot.py -v` -> `Ran 8 tests in 3.899s. OK` (Verified 2026-11-22)
+- `python -m unittest discover -s tests -p "test_*.py" -v` -> `Ran 49 tests in 33.260s. OK` (All 49 tests across Phases 1-7 verified passing 2026-11-22)
 
 ## Open Issues
 (none)
