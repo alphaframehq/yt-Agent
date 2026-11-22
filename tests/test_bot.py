@@ -177,6 +177,47 @@ class TestTelegramBot(unittest.TestCase):
         cb_prev = handle_callback_query("prv_yt_priv_test999")
         self.assertIn("Video Preview Card", cb_prev["text"])
 
+    def test_13_interactive_dashboard_menu(self):
+        """Verify main interactive dashboard (/menu, /start, callback menu_main)."""
+        res_menu = handle_command(user_id=12345, command="menu", args=[])
+        self.assertIn("TubePilot AI — Control Deck", res_menu["text"])
+        self.assertTrue(len(res_menu.get("buttons", [])) >= 8)
+
+        # Test callback menu_main
+        cb_menu = handle_callback_query("menu_main")
+        self.assertIn("TubePilot AI — Control Deck", cb_menu["text"])
+
+    def test_14_script_and_audit_inspector(self):
+        """Verify /script and fact-check verification audit review."""
+        res_script = handle_command(user_id=12345, command="script", args=["Stripe"])
+        self.assertIn("Fact-Check Verification Audit", res_script["text"])
+        self.assertIn("Claim Provenance Check", res_script["text"])
+        self.assertIn("Overall Verification Status", res_script["text"])
+
+        # Test callback menu_script
+        cb_script = handle_callback_query("menu_script")
+        self.assertIn("Fact-Check Verification Audit", cb_script["text"])
+
+    def test_15_ideas_and_quick_queue(self):
+        """Verify /ideas brainstorm and 1-tap queueing callback."""
+        res_ideas = handle_command(user_id=12345, command="ideas", args=[])
+        self.assertIn("Trending Institutional FinTech Video Topics", res_ideas["text"])
+        self.assertTrue(len(res_ideas.get("buttons", [])) >= 4)
+
+        # Test 1-tap queue callback
+        cb_queue = handle_callback_query("qidea_1")
+        self.assertIn("Topic Added to Queue", cb_queue["text"])
+
+    def test_16_videos_history_command(self):
+        """Verify /videos command lists production history."""
+        res_vids = handle_command(user_id=12345, command="videos", args=[])
+        self.assertIn("Recent Production Video History", res_vids["text"])
+
+    def test_17_clear_topic_queue(self):
+        """Verify /clear command and queue clearing callback."""
+        res_clear = handle_command(user_id=12345, command="clear", args=[])
+        self.assertIn("Topic Queue Cleared", res_clear["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

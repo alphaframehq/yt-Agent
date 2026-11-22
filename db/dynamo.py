@@ -349,3 +349,67 @@ def list_topics_queue(status: Optional[str] = None) -> List[Dict[str, Any]]:
 dequeue_next_topic = get_next_topic
 get_topic_queue = list_topics_queue
 
+
+def list_recent_videos(limit: int = 5) -> List[Dict[str, Any]]:
+    """Retrieve recent video records from yt_videos."""
+    table = _get_table("yt_videos")
+    if table:
+        try:
+            resp = table.scan()
+            items = resp.get("Items", [])
+            items.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+            return items[:limit]
+        except Exception:
+            pass
+
+    items = list(_IN_MEMORY_STORE["yt_videos"].values())
+    items.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+    return items[:limit]
+
+
+def clear_topic_queue() -> int:
+    """Clear all pending topics from the topic queue."""
+    cleared = 0
+    table = _get_table("yt_topics_queue")
+    if table:
+        try:
+            resp = table.scan()
+            for it in resp.get("Items", []):
+                if it.get("status") == "pending":
+                    table.delete_item(Key={"topic_id": it["topic_id"]})
+                    cleared += 1
+            return cleared
+        except Exception:
+            pass
+
+    to_del = [k for k, v in _IN_MEMORY_STORE["yt_topics_queue"].items() if v.get("status") == "pending"]
+    for k in to_del:
+        del _IN_MEMORY_STORE["yt_topics_queue"][k]
+        cleared += 1
+    return cleared
+
+
+def get_latest_verification_log(video_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch the latest verification log for a video."""
+    table = _get_table("yt_verification_log")
+    if table:
+        try:
+            resp = table.query(
+                KeyConditionExpression="video_id = :v",
+                ExpressionAttributeValues={":v": video_id},
+                ScanIndexForward=False,
+                Limit=1,
+            )
+            items = resp.get("Items", [])
+            if items:
+                return items[0]
+        except Exception:
+            pass
+
+    matches = [v for k, v in _IN_MEMORY_STORE["yt_verification_log"].items() if k.startswith(video_id)]
+    if matches:
+        matches.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        return matches[0]
+    return None
+
+
