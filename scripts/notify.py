@@ -1,6 +1,7 @@
 """TubePilot AI — Telegram Notification Helper
 
-Dispatches markdown notifications and inline callback buttons to the Telegram Admin.
+Dispatches markdown notifications, inline callback buttons, video previews,
+and visual thumbnails to the Telegram Admin.
 Can be imported as a module or executed directly via CLI.
 """
 
@@ -11,6 +12,9 @@ import sys
 import json
 import urllib.request
 import urllib.error
+from pathlib import Path
+from typing import Optional
+import httpx
 from loguru import logger
 
 # Ensure project root is in sys.path
@@ -20,11 +24,18 @@ if _PROJECT_ROOT not in sys.path:
 
 from tools.secrets import get_secret
 
+__all__ = [
+    "send_telegram_notification",
+    "send_telegram_video",
+    "send_telegram_photo",
+]
+
 
 def send_telegram_notification(
     text: str,
     buttons: list[dict[str, str]] | None = None,
     parse_mode: str = "Markdown",
+    disable_web_page_preview: bool = False,
 ) -> bool:
     """Send a notification message to the Telegram admin with optional inline keyboard buttons.
 
@@ -33,6 +44,7 @@ def send_telegram_notification(
         buttons: List of dicts, each with 'text' and 'callback_data' or 'url'.
                  Example: [{'text': '🚀 Publish', 'callback_data': 'pub_123'}]
         parse_mode: 'Markdown' or 'HTML'
+        disable_web_page_preview: Set False to allow rich video preview cards (default False).
 
     Returns:
         True if sent successfully, False otherwise.
@@ -49,7 +61,7 @@ def send_telegram_notification(
         "chat_id": chat_id,
         "text": text,
         "parse_mode": parse_mode,
-        "disable_web_page_preview": True,
+        "disable_web_page_preview": disable_web_page_preview,
     }
 
     if buttons:
@@ -109,6 +121,105 @@ def send_telegram_notification(
         return False
     except Exception as e:
         logger.error(f"Unexpected error sending Telegram notification: {e}")
+        return False
+
+
+def send_telegram_video(
+    video_path: str,
+    caption: str = "",
+    chat_id: Optional[str | int] = None,
+) -> bool:
+    """Send a rendered video or preview clip directly to Telegram.
+
+    Args:
+        video_path: Absolute or relative path to the MP4 file on disk.
+        caption: Optional markdown caption accompanying the video.
+        chat_id: Target chat ID (defaults to TELEGRAM_ADMIN_ID).
+
+    Returns:
+        True if video was uploaded and accepted by Telegram Bot API, False otherwise.
+    """
+    token = get_secret("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+    target_chat = chat_id or get_secret("TELEGRAM_ADMIN_ID") or os.environ.get("TELEGRAM_ADMIN_ID")
+
+    if not token or not target_chat:
+        logger.warning("Telegram credentials not configured. Video send skipped.")
+        return False
+
+    path = Path(video_path)
+    if not path.is_file():
+        logger.warning(f"Cannot send video preview: File not found at '{video_path}'")
+        return False
+
+    # Check file size (Telegram Bot API limit is 50MB for upload)
+    size_mb = path.stat().st_size / (1024 * 1024)
+    if size_mb > 50.0:
+        logger.warning(f"Video file ({size_mb:.1f}MB) exceeds Telegram Bot API 50MB limit.")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendVideo"
+    logger.info(f"Uploading video preview '{path.name}' ({size_mb:.2f}MB) to Telegram...")
+
+    try:
+        with open(path, "rb") as vf:
+            files = {"video": (path.name, vf, "video/mp4")}
+            data = {
+                "chat_id": str(target_chat),
+                "caption": caption[:1024],
+                "supports_streaming": "true",
+            }
+            with httpx.Client(timeout=120.0) as client:
+                resp = client.post(url, data=data, files=files)
+                if resp.status_code == 200:
+                    logger.info(f"✅ Video preview successfully delivered to Telegram ({path.name}).")
+                    return True
+                else:
+                    logger.warning(f"Failed to send video (HTTP {resp.status_code}): {resp.text}")
+                    return False
+    except Exception as e:
+        logger.error(f"Exception during Telegram sendVideo: {e}")
+        return False
+
+
+def send_telegram_photo(
+    photo_path: str,
+    caption: str = "",
+    chat_id: Optional[str | int] = None,
+) -> bool:
+    """Send an image or visual chart directly to Telegram.
+
+    Args:
+        photo_path: Absolute or relative path to the PNG/JPG file on disk.
+        caption: Optional markdown caption.
+        chat_id: Target chat ID (defaults to TELEGRAM_ADMIN_ID).
+
+    Returns:
+        True if uploaded successfully, False otherwise.
+    """
+    token = get_secret("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+    target_chat = chat_id or get_secret("TELEGRAM_ADMIN_ID") or os.environ.get("TELEGRAM_ADMIN_ID")
+
+    if not token or not target_chat:
+        return False
+
+    path = Path(photo_path)
+    if not path.is_file():
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+        with open(path, "rb") as pf:
+            files = {"photo": (path.name, pf, mime)}
+            data = {
+                "chat_id": str(target_chat),
+                "caption": caption[:1024],
+            }
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(url, data=data, files=files)
+                return resp.status_code == 200
+    except Exception as e:
+        logger.error(f"Exception during Telegram sendPhoto: {e}")
         return False
 
 

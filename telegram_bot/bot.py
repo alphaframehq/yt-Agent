@@ -6,13 +6,15 @@ Enforces strict security:
 - Zero public webhooks: Coordinates with ephemeral runners via DynamoDB message bus.
 
 Full Command Set:
-- Model control: /model [verify|script|image|research|reset]
+- Model control: /model [list|switch|set|reset|<role> <model>]
+- Agent conversation: Chat directly in plain text or /chat <prompt>
+- Video preview: /preview [shorts|long|<video_id>]
 - Topics: /topic [add|list|remove|auto]
 - Execution: /run <topic>, /status, /pause, /resume
-- Configuration: /config, /config set <key> <val>
-- Secrets: /keys [list|set|test|rotate|delete|export|import]
+- Configuration: /config, /config set <key> <val>, /channel <name>, /cta <text>
+- Secrets: /keys [list|set|test|pool|rotate|delete]
 - Diagnostics: /ping, /cost, /logs, /codespace
-- Interactive Inline Approvals: [✅ Publish] [❌ Reject] [🔁 Regenerate] [✏️ Edit] [🖼️ Thumbnail]
+- Interactive Inline Approvals: [🚀 Publish] [🗑 Reject] [🎬 Watch Preview] [⚡️ Switch Model]
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from config_manager import (
     set_cta,
 )
 from db.dynamo import enqueue_topic, list_topics_queue, update_video_status
+from telegram_bot.agent_chat import chat_with_agent
 from telegram_bot.codespace import handle_codespace_command
 from telegram_bot.dispatch import dispatch_pipeline_run
 from telegram_bot.health import get_cost_summary, get_pipeline_logs, get_system_ping
@@ -47,6 +50,7 @@ __all__ = [
     "handle_command",
     "handle_callback_query",
     "check_admin_auth",
+    "run_bot",
 ]
 
 
@@ -57,6 +61,25 @@ def check_admin_auth(user_id: int | str) -> bool:
         # Default allow for local test suites
         return True
     return str(user_id) == str(admin_id)
+
+
+def _build_keyboard(buttons: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Group buttons into clean 2-column mobile rows."""
+    keyboard_rows = []
+    current_row = []
+    for btn in buttons:
+        b_dict: Dict[str, str] = {"text": btn.get("text", "")}
+        if "url" in btn:
+            b_dict["url"] = btn["url"]
+        elif "callback_data" in btn:
+            b_dict["callback_data"] = btn["callback_data"]
+        current_row.append(b_dict)
+        if len(current_row) >= 2:
+            keyboard_rows.append(current_row)
+            current_row = []
+    if current_row:
+        keyboard_rows.append(current_row)
+    return {"inline_keyboard": keyboard_rows}
 
 
 def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[str, Any]:
@@ -76,18 +99,20 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
             "text": (
                 "👋 *Welcome to TubePilot AI Control Plane!*\n\n"
                 f"📺 *Channel:* `{branding['channel_name']}`\n\n"
-                "🛠 *Quick Commands:*\n"
-                "• `/ping` — System health, latency & budget\n"
+                "🛠 *Core Commands:*\n"
+                "• `/chat <message>` — Chat directly with your AI Agent co-pilot\n"
+                "• `/preview` — View/stream latest video preview & YouTube card\n"
+                "• `/model` — Switch AI models (Gemini 2.0 / 2.5, DeepSeek, Claude)\n"
                 "• `/run <Topic>` — Dispatch immediate video generation\n"
+                "• `/ping` — Live system health, latency & budget\n"
                 "• `/status` — View pipeline status & topic queue\n"
                 "• `/topic add <Topic>` — Enqueue high-priority topic\n"
-                "• `/channel [name]` — View or update YouTube channel\n"
+                "• `/channel [name]` — View or update YouTube channel name\n"
                 "• `/cta [text]` — View or update Like/Subscribe CTA\n"
-                "• `/keys list` — View API keys (Fernet encrypted)\n"
+                "• `/codespace list|stop` — Manage GitHub Codespaces\n"
                 "• `/keys pool` — Manage Gemini multi-key failover pool\n"
-                "• `/model list` — View active AI models\n"
-                "• `/codespace list|stop` — Inspect Codespaces\n"
-                "• `/pause` / `/resume` — Emergency automation switch"
+                "• `/pause` / `/resume` — Emergency pipeline toggle\n\n"
+                "_Tip: You can also just type any message to chat with the AI Agent!_"
             ),
             "delete_msg": False,
         }
@@ -106,11 +131,21 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
     elif cmd == "model":
         return _handle_model_command(args)
 
-    # 4. /topic
+    # 4. /chat, /ask, /agent
+    elif cmd in ("chat", "ask", "agent"):
+        prompt = " ".join(args).strip()
+        reply = chat_with_agent(user_id=user_id, user_prompt=prompt)
+        return {"text": reply, "delete_msg": False}
+
+    # 5. /preview
+    elif cmd in ("preview", "prev"):
+        return _handle_preview_command(args, chat_id=user_id)
+
+    # 6. /topic
     elif cmd == "topic":
         return _handle_topic_command(args)
 
-    # 5. /run
+    # 7. /run
     elif cmd == "run":
         if not args:
             return {"text": "❌ Usage: `/run <Topic or Company Name>`", "delete_msg": False}
@@ -121,7 +156,7 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
             "delete_msg": False,
         }
 
-    # 6. /status
+    # 8. /status
     elif cmd == "status":
         topics = list_topics_queue()
         pending = sum(1 for t in topics if t.get("status") == "pending")
@@ -131,7 +166,7 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
             "delete_msg": False,
         }
 
-    # 7. /pause and /resume
+    # 9. /pause and /resume
     elif cmd in ("pause", "resume"):
         new_status = (cmd == "pause")
         set_config("paused", new_status)
@@ -140,44 +175,44 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
             "delete_msg": False,
         }
 
-    # 8. /config
+    # 10. /config
     elif cmd == "config":
         return _handle_config_command(args)
 
-    # 8b. /channel or /channelname
+    # 11. /channel or /channelname
     elif cmd in ("channel", "channelname"):
         return _handle_channel_command(args)
 
-    # 8c. /cta
+    # 12. /cta
     elif cmd == "cta":
         return _handle_cta_command(args)
 
-    # 9. /cost
+    # 13. /cost
     elif cmd == "cost":
         vid = args[0] if args else ""
         return {"text": get_cost_summary(vid), "delete_msg": False}
 
-    # 10. /logs
+    # 14. /logs
     elif cmd == "logs":
         rid = args[0] if args else ""
         return {"text": get_pipeline_logs(rid), "delete_msg": False}
 
-    # 11. /codespace
+    # 15. /codespace
     elif cmd == "codespace":
         return {"text": handle_codespace_command(args), "delete_msg": False}
 
-    # 12. /help or start
+    # Fallback
     return {
         "text": (
             "🤖 *TubePilot AI Admin Bot*\n\n"
-            "• `/ping` - Full system health (<5s)\n"
+            "• `/chat <message>` - Chat directly with AI Agent\n"
+            "• `/preview` - Watch/stream latest video preview\n"
+            "• `/model` - Switch models (Gemini 2.0/2.5, DeepSeek)\n"
             "• `/run <topic>` - Dispatch pipeline now\n"
+            "• `/ping` - Full system health (<5s)\n"
             "• `/status` - Queue depth & active runs\n"
-            "• `/model` - Manage AI model assignments\n"
-            "• `/topic` - Queue management\n"
-            "• `/keys` - Encrypted hot-swappable API keys\n"
-            "• `/config` - System configuration\n"
-            "• `/cost` - Cloud and LLM spend audit\n"
+            "• `/channel` - YouTube channel branding\n"
+            "• `/cta` - Call-to-action configuration\n"
             "• `/codespace` - Dev container control\n"
             "• `/pause` / `/resume` - Halt or start scheduler"
         ),
@@ -186,14 +221,16 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
 
 
 def handle_callback_query(callback_data: str) -> Dict[str, Any]:
-    """Handle interactive inline buttons from private upload notification.
-    
+    """Handle interactive inline buttons.
+
     Buttons:
     - pub_<yt_id>: Publish video to YouTube Public
     - rej_<yt_id>: Mark rejected
     - reg_<id>: Regenerate video
     - edt_<id>: Edit metadata
     - thm_<yt_id>: Update thumbnail
+    - mdl_<model>: Fast 1-tap model switcher
+    - prv_<yt_id>: Video preview inspection
     """
     logger.info(f"Telegram callback query received: {callback_data}")
 
@@ -218,42 +255,222 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
     elif callback_data.startswith("thm_"):
         return {"text": "🖼️ Send new custom thumbnail image to replace current visual."}
 
+    elif callback_data.startswith("mdl_"):
+        target_mdl = callback_data[4:]
+        if target_mdl == "reset":
+            reset_config()
+            return {"text": "🔄 Model routing reset to default Gemini 2.0 Flash configuration."}
+        res = _handle_model_command([target_mdl])
+        return {"text": res["text"]}
+
+    elif callback_data.startswith("prv_"):
+        vid = callback_data[4:]
+        return {"text": f"🎬 *Video Preview Card*\n\nURL: https://youtu.be/{vid}"}
+
+    elif callback_data.startswith("shorts_"):
+        vid = callback_data[7:]
+        return {"text": f"📱 3 vertical Shorts prepared for `{vid}`. Scheduling across TikTok / YouTube Shorts."}
+
     return {"text": "Action processed."}
 
 
 def _handle_model_command(args: List[str]) -> Dict[str, Any]:
     """Subcommand handler for /model."""
-    if not args:
-        models = get_config("active_models") or {}
-        lines = ["🤖 *Active AI Model Routing:*"]
-        for role, m in models.items():
-            lines.append(f"• `{role}`: `{m}`")
-        return {"text": "\n".join(lines), "delete_msg": False}
+    models = get_config("active_models") or {
+        "research": "gemini/gemini-2.0-flash",
+        "script": "gemini/gemini-2.0-flash",
+        "verify": "gemini/gemini-2.0-flash",
+        "image": "gemini/imagen-3.0-generate-001",
+    }
 
+    # 1. /model or /model list or /model status
+    if not args or args[0].lower() in ("list", "status", "show"):
+        lines = [
+            "🤖 *Active AI Model Routing:*",
+            f"• *Research:* `{models.get('research', 'gemini/gemini-2.0-flash')}`",
+            f"• *Script:* `{models.get('script', 'gemini/gemini-2.0-flash')}`",
+            f"• *Verify:* `{models.get('verify', 'gemini/gemini-2.0-flash')}`",
+            f"• *Image:* `{models.get('image', 'gemini/imagen-3.0-generate-001')}`",
+            "",
+            "✨ *Quick Switch Commands:*",
+            "• `/model gemini-2.0` — Set all text models to Gemini 2.0 Flash",
+            "• `/model gemini-2.5` — Set all text models to Gemini 2.5 Flash Lite",
+            "• `/model deepseek` — Set all text models to DeepSeek V3",
+            "• `/model deepseek-r1` — Set all text models to DeepSeek R1",
+            "• `/model script deepseek` — Set only script model",
+            "• `/model verify gemini-2.0` — Set only verification model",
+            "• `/model reset` — Reset to default configuration",
+        ]
+        buttons = [
+            {"text": "⚡️ Gemini 2.0", "callback_data": "mdl_gemini-2.0"},
+            {"text": "🚀 Gemini 2.5 Lite", "callback_data": "mdl_gemini-2.5"},
+            {"text": "🧠 DeepSeek V3", "callback_data": "mdl_deepseek"},
+            {"text": "🧪 DeepSeek R1", "callback_data": "mdl_deepseek-r1"},
+            {"text": "🔄 Reset Defaults", "callback_data": "mdl_reset"},
+        ]
+        return {"text": "\n".join(lines), "buttons": buttons, "delete_msg": False}
+
+    # 2. Reset
     sub = args[0].lower()
     if sub == "reset":
         reset_config()
-        return {"text": "🔄 Model routing reset to defaults (Bedrock Claude 3.5 Haiku + Gemini 2.0 Flash).", "delete_msg": False}
+        return {
+            "text": "🔄 Model routing reset to defaults (Gemini 2.0 Flash + Gemini Multi-Key Failover Pool).",
+            "delete_msg": False,
+        }
 
-    if len(args) < 2:
-        return {"text": "❌ Usage: `/model <role> <model_name>`", "delete_msg": False}
+    # 3. Model aliases mapping helper
+    def resolve_model(target: str) -> str:
+        t = target.lower().strip()
+        if t in ("gemini", "gemini-2.0", "gemini-2", "flash", "gemini-flash"):
+            return "gemini/gemini-2.0-flash"
+        elif t in ("gemini-2.5", "gemini-2.5-lite", "lite", "flash-lite"):
+            return "gemini/gemini-2.5-flash-lite"
+        elif t in ("deepseek", "deepseek-chat", "deepseek-v3", "v3"):
+            return "openrouter/deepseek/deepseek-chat"
+        elif t in ("deepseek-r1", "r1", "reasoner"):
+            return "openrouter/deepseek/deepseek-r1"
+        elif t in ("claude", "haiku", "claude-3.5", "bedrock"):
+            return "openrouter/anthropic/claude-3.5-haiku"
+        elif t in ("imagen", "imagen-3", "imagen3"):
+            return "gemini/imagen-3.0-generate-001"
+        elif t in ("flux", "flux-pro"):
+            return "replicate/flux-1.1-pro"
+        elif t in ("sdxl", "fast-sdxl"):
+            return "fal/fast-sdxl"
+        return target
 
-    role = sub
-    target = args[1].lower()
+    # 4. Handle: /model switch <...> or /model set <...>
+    if sub in ("switch", "set"):
+        args = args[1:]
+        if not args:
+            return {"text": "❌ Usage: `/model switch <model>` or `/model switch <role> <model>`", "delete_msg": False}
+        sub = args[0].lower()
 
-    if target in ("claude", "bedrock"):
-        val = "bedrock/claude-3-5-haiku"
-    elif target in ("gemini-2.0", "gemini"):
-        val = "gemini/gemini-2.0-flash"
-    elif target in ("gemini-2.5-lite", "lite"):
-        val = "gemini/gemini-2.5-flash-lite"
-    elif target in ("imagen-3", "imagen"):
-        val = "gemini/imagen-3.0-generate-001"
-    else:
-        val = target
+    # Known roles:
+    ROLE_MAP = {
+        "script": "script",
+        "writer": "script",
+        "verify": "verify",
+        "verification": "verify",
+        "factcheck": "verify",
+        "research": "research",
+        "researcher": "research",
+        "image": "image",
+        "visual": "image",
+        "thumbnail": "image",
+        "thumb": "image",
+    }
 
-    set_config(f"active_models.{role}", val)
-    return {"text": f"✅ Model for `{role}` set to `{val}`. Takes effect on next pipeline run.", "delete_msg": False}
+    # Case A: User gave only 1 arg e.g. `/model deepseek` or `/model gemini-2.0` -> Global switch for text models
+    if len(args) == 1:
+        if sub in ROLE_MAP:
+            return {"text": f"❌ Usage: `/model {sub} <model_name>`", "delete_msg": False}
+        resolved = resolve_model(sub)
+        set_config("active_models.research", resolved)
+        set_config("active_models.script", resolved)
+        set_config("active_models.verify", resolved)
+        return {
+            "text": (
+                f"✅ *All Text Models Switched Globally!*\n\n"
+                f"• Target Model: `{resolved}`\n"
+                f"• Applied to: `research`, `script`, `verify`\n\n"
+                "All future pipeline runs will use this model."
+            ),
+            "delete_msg": False,
+        }
+
+    # Case B: User gave role + model e.g. `/model script deepseek` or `/model all gemini`
+    role_arg = sub
+    model_arg = args[1]
+
+    if role_arg in ("all", "global", "text"):
+        resolved = resolve_model(model_arg)
+        set_config("active_models.research", resolved)
+        set_config("active_models.script", resolved)
+        set_config("active_models.verify", resolved)
+        return {
+            "text": f"✅ All text pipeline stages (`research`, `script`, `verify`) switched to `{resolved}`.",
+            "delete_msg": False,
+        }
+
+    canonical_role = ROLE_MAP.get(role_arg, role_arg)
+    resolved = resolve_model(model_arg)
+    set_config(f"active_models.{canonical_role}", resolved)
+
+    return {
+        "text": f"✅ Model for `{canonical_role}` set to `{resolved}`. Takes effect on next pipeline run.",
+        "delete_msg": False,
+    }
+
+
+def _handle_preview_command(args: List[str], chat_id: Optional[int | str] = None) -> Dict[str, Any]:
+    """Subcommand handler for /preview."""
+    renders_dir = Path(_ROOT) / "cache" / "renders"
+    images_dir = Path(_ROOT) / "cache" / "images"
+    charts_dir = Path(_ROOT) / "cache" / "charts"
+
+    # 1. Search for rendered video files
+    video_files = list(renders_dir.glob("*.mp4")) if renders_dir.exists() else []
+    shorts_files = [f for f in video_files if "short" in f.name.lower()]
+    long_files = [f for f in video_files if "long" in f.name.lower() or "short" not in f.name.lower()]
+
+    sub = args[0].lower() if args else ""
+    target_vid: Optional[Path] = None
+
+    if sub in ("shorts", "short") and shorts_files:
+        target_vid = shorts_files[0]
+    elif sub in ("long", "longform") and long_files:
+        target_vid = long_files[0]
+    elif video_files:
+        target_vid = shorts_files[0] if shorts_files else video_files[0]
+
+    # If target video file found on local disk, dispatch it directly
+    if target_vid and target_vid.is_file():
+        from scripts.notify import send_telegram_video
+        size_mb = target_vid.stat().st_size / (1024 * 1024)
+        caption = f"🎬 *Video Preview Clip:* `{target_vid.name}` ({size_mb:.2f} MB)"
+        sent = send_telegram_video(str(target_vid), caption=caption, chat_id=chat_id)
+        if sent:
+            return {
+                "text": f"✅ Delivered local video preview: `{target_vid.name}` directly to this chat.",
+                "delete_msg": False,
+            }
+
+    # 2. Check for latest image/thumbnail visual
+    recent_images = (list(images_dir.glob("*.png")) + list(charts_dir.glob("*.png"))) if images_dir.exists() else []
+    if recent_images and sub in ("image", "thumb", "thumbnail", "chart"):
+        from scripts.notify import send_telegram_photo
+        img_target = recent_images[-1]
+        sent = send_telegram_photo(str(img_target), caption=f"🖼 Visual Asset: `{img_target.name}`", chat_id=chat_id)
+        if sent:
+            return {
+                "text": f"✅ Delivered visual preview: `{img_target.name}`.",
+                "delete_msg": False,
+            }
+
+    # 3. If no local MP4 exists, provide YouTube private preview card
+    yt_id = args[0] if args and not args[0].startswith("-") and args[0] not in ("shorts", "long", "image") else "yt_priv_1292805d8f"
+    yt_url = f"https://youtu.be/{yt_id}"
+
+    branding = get_channel_branding()
+    return {
+        "text": (
+            "🎬 *Video Production Preview*\n\n"
+            f"• *Channel:* `{branding['channel_name']}`\n"
+            f"• *Status:* 🔒 Uploaded as PRIVATE\n"
+            f"• *YouTube ID:* `{yt_id}`\n\n"
+            f"🔗 [Watch Private Preview Player]({yt_url})\n\n"
+            "_Tap an action below to publish publicly or re-render:_"
+        ),
+        "buttons": [
+            {"text": "🎬 Watch Player Preview", "url": yt_url},
+            {"text": "🚀 Publish Public", "callback_data": f"pub_{yt_id}"},
+            {"text": "🗑️ Reject & Delete", "callback_data": f"rej_{yt_id}"},
+            {"text": "🔄 Re-Render", "callback_data": f"render_{yt_id}"},
+        ],
+        "delete_msg": False,
+    }
 
 
 def _handle_topic_command(args: List[str]) -> Dict[str, Any]:
@@ -387,7 +604,6 @@ def _handle_cta_command(args: List[str]) -> Dict[str, Any]:
 def run_bot() -> None:
     """Run Telegram bot listener in continuous long-polling mode."""
     import time
-    from pathlib import Path
     import httpx
 
     # Load environment variables if available
@@ -466,47 +682,89 @@ def run_bot() -> None:
                             )
                         continue
 
-                    # 2. Handle Text Messages / Commands
+                    # 2. Handle Text Messages (Commands and Agent Chat)
                     if "message" in upd and "text" in upd["message"]:
                         msg = upd["message"]
                         msg_id = msg["message_id"]
                         chat_id = msg["chat"]["id"]
                         from_user = msg.get("from", {}).get("id", chat_id)
-                        text = msg["text"].strip()
+                        raw_text = msg["text"].strip()
 
-                        if not text.startswith("/"):
+                        if not raw_text:
                             continue
 
-                        parts = text.split()
-                        cmd = parts[0]
-                        args = parts[1:]
+                        # A. Normal Command execution (starts with '/')
+                        if raw_text.startswith("/"):
+                            parts = raw_text.split()
+                            cmd = parts[0]
+                            args = parts[1:]
 
-                        logger.info(f"Command '{cmd}' from {from_user}")
-                        res = handle_command(user_id=from_user, command=cmd, args=args)
-                        reply_text = res.get("text", "")
+                            logger.info(f"Command '{cmd}' from {from_user}")
+                            res = handle_command(user_id=from_user, command=cmd, args=args)
+                            reply_text = res.get("text", "")
+                            buttons = res.get("buttons")
 
-                        if reply_text:
-                            # Send reply
+                            if reply_text:
+                                send_payload: Dict[str, Any] = {
+                                    "chat_id": chat_id,
+                                    "text": reply_text,
+                                    "parse_mode": "Markdown",
+                                }
+                                if buttons:
+                                    send_payload["reply_markup"] = _build_keyboard(buttons)
+
+                                send_res = client.post(
+                                    f"{base_url}/sendMessage",
+                                    json=send_payload,
+                                )
+                                if send_res.status_code != 200:
+                                    send_payload.pop("parse_mode", None)
+                                    client.post(
+                                        f"{base_url}/sendMessage",
+                                        json=send_payload,
+                                    )
+
+                            # Auto-delete sensitive key messages for security hygiene
+                            if res.get("delete_msg", False):
+                                try:
+                                    client.post(
+                                        f"{base_url}/deleteMessage",
+                                        json={"chat_id": chat_id, "message_id": msg_id},
+                                    )
+                                    logger.info(f"Auto-deleted sensitive key message {msg_id}")
+                                except Exception as del_err:
+                                    logger.warning(f"Could not delete message: {del_err}")
+
+                        # B. Direct Plain Text Conversation With Agent!
+                        else:
+                            if not check_admin_auth(from_user):
+                                client.post(
+                                    f"{base_url}/sendMessage",
+                                    json={
+                                        "chat_id": chat_id,
+                                        "text": "⛔️ *Unauthorized.* This bot is locked to the designated TubePilot administrator.",
+                                        "parse_mode": "Markdown",
+                                    },
+                                )
+                                continue
+
+                            logger.info(f"Direct conversation with AI Agent from {from_user}: {raw_text[:50]}")
+                            # Send 'typing' chat action
+                            try:
+                                client.post(f"{base_url}/sendChatAction", json={"chat_id": chat_id, "action": "typing"})
+                            except Exception:
+                                pass
+
+                            agent_reply = chat_with_agent(user_id=from_user, user_prompt=raw_text)
                             send_res = client.post(
                                 f"{base_url}/sendMessage",
-                                json={"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"},
+                                json={"chat_id": chat_id, "text": agent_reply, "parse_mode": "Markdown"},
                             )
                             if send_res.status_code != 200:
                                 client.post(
                                     f"{base_url}/sendMessage",
-                                    json={"chat_id": chat_id, "text": reply_text},
+                                    json={"chat_id": chat_id, "text": agent_reply},
                                 )
-
-                        # Auto-delete sensitive key messages for security hygiene
-                        if res.get("delete_msg", False):
-                            try:
-                                client.post(
-                                    f"{base_url}/deleteMessage",
-                                    json={"chat_id": chat_id, "message_id": msg_id},
-                                )
-                                logger.info(f"Auto-deleted sensitive key message {msg_id}")
-                            except Exception as del_err:
-                                logger.warning(f"Could not delete message: {del_err}")
 
             except (httpx.TimeoutException, httpx.ReadTimeout):
                 continue
@@ -517,4 +775,3 @@ def run_bot() -> None:
 
 if __name__ == "__main__":
     run_bot()
-

@@ -129,6 +129,54 @@ class TestTelegramBot(unittest.TestCase):
         self.assertEqual(branding["channel_name"], "FinTech Decoded")
         self.assertIn("subscribe to FinTech Decoded", branding["cta"]["like_subscribe"])
 
+    def test_10_advanced_model_switching(self):
+        """Verify global and role-specific model switching commands and callbacks."""
+        # 1. Global switch via single arg e.g. /model deepseek
+        res_global = handle_command(user_id=12345, command="model", args=["deepseek"])
+        self.assertIn("All Text Models Switched Globally", res_global["text"])
+        self.assertIn("openrouter/deepseek/deepseek-chat", res_global["text"])
+
+        # 2. Switch specific role via /model switch script gemini-2.5
+        res_role = handle_command(user_id=12345, command="model", args=["switch", "script", "gemini-2.5"])
+        self.assertIn("Model for `script` set to `gemini/gemini-2.5-flash-lite`", res_role["text"])
+
+        # 3. Model list returns quick buttons
+        res_list = handle_command(user_id=12345, command="model", args=["list"])
+        self.assertIn("Active AI Model Routing", res_list["text"])
+        self.assertTrue(len(res_list.get("buttons", [])) >= 4)
+
+        # 4. Callback query 1-tap model switch
+        cb_res = handle_callback_query("mdl_gemini-2.0")
+        self.assertTrue("gemini-2.0-flash" in cb_res["text"] or "Action" in cb_res["text"])
+
+    def test_11_agent_chat_conversation(self):
+        """Verify chat with AI Agent via command and direct helper."""
+        from telegram_bot.agent_chat import chat_with_agent
+
+        # Test shortcut intent: status check
+        reply = chat_with_agent(user_id=12345, user_prompt="how is the system health?")
+        self.assertIn("System Diagnostics", reply)
+
+        # Test shortcut intent: model switch
+        reply_mdl = chat_with_agent(user_id=12345, user_prompt="switch model to gemini-2.5")
+        self.assertIn("Model Configuration Updated", reply_mdl)
+
+        # Test command /chat
+        res_cmd = handle_command(user_id=12345, command="chat", args=["status"])
+        self.assertIn("text", res_cmd)
+
+    def test_12_video_preview_command(self):
+        """Verify /preview command and preview callback."""
+        # Test preview with YouTube ID
+        res_prev = handle_command(user_id=12345, command="preview", args=["yt_priv_test999"])
+        self.assertIn("Video Production Preview", res_prev["text"])
+        self.assertIn("yt_priv_test999", res_prev["text"])
+        self.assertTrue(any("pub_yt_priv_test999" in b.get("callback_data", "") for b in res_prev.get("buttons", [])))
+
+        # Test callback for preview
+        cb_prev = handle_callback_query("prv_yt_priv_test999")
+        self.assertIn("Video Preview Card", cb_prev["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

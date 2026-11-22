@@ -116,6 +116,8 @@ def main() -> int:
                 duration_sec=duration,
                 spend_usd=spend,
                 shorts_count=3,
+                video_path=rendered_shorts or rendered_video,
+                thumbnail_path=result.get("thumbnail_path"),
             )
         else:
             error_msg = f"Pipeline ended with status: '{status}'. Halted for review."
