@@ -4,6 +4,7 @@ from telegram_bot.bot import (
     check_admin_auth,
     handle_callback_query,
     handle_command,
+    run_bot,
 )
 from telegram_bot.codespace import handle_codespace_command
 from telegram_bot.dispatch import dispatch_pipeline_run
@@ -14,6 +15,7 @@ __all__ = [
     "handle_command",
     "handle_callback_query",
     "check_admin_auth",
+    "run_bot",
     "handle_keys_command",
     "get_system_ping",
     "get_cost_summary",

@@ -18,8 +18,14 @@ Full Command Set:
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from loguru import logger
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from config_manager import (
     get_config,
@@ -63,8 +69,31 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
 
     cmd = command.lower().strip().lstrip("/")
 
+    # 0. /start or /help
+    if cmd in ("start", "help"):
+        branding = get_channel_branding()
+        return {
+            "text": (
+                "👋 *Welcome to TubePilot AI Control Plane!*\n\n"
+                f"📺 *Channel:* `{branding['channel_name']}`\n\n"
+                "🛠 *Quick Commands:*\n"
+                "• `/ping` — System health, latency & budget\n"
+                "• `/run <Topic>` — Dispatch immediate video generation\n"
+                "• `/status` — View pipeline status & topic queue\n"
+                "• `/topic add <Topic>` — Enqueue high-priority topic\n"
+                "• `/channel [name]` — View or update YouTube channel\n"
+                "• `/cta [text]` — View or update Like/Subscribe CTA\n"
+                "• `/keys list` — View API keys (Fernet encrypted)\n"
+                "• `/keys pool` — Manage Gemini multi-key failover pool\n"
+                "• `/model list` — View active AI models\n"
+                "• `/codespace list|stop` — Inspect Codespaces\n"
+                "• `/pause` / `/resume` — Emergency automation switch"
+            ),
+            "delete_msg": False,
+        }
+
     # 1. /ping
-    if cmd == "ping":
+    elif cmd == "ping":
         res = get_system_ping()
         return {"text": res["text"], "delete_msg": False}
 
@@ -353,4 +382,139 @@ def _handle_cta_command(args: List[str]) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"text": f"❌ Error saving CTA: {e}", "delete_msg": False}
+
+
+def run_bot() -> None:
+    """Run Telegram bot listener in continuous long-polling mode."""
+    import time
+    from pathlib import Path
+    import httpx
+
+    # Load environment variables if available
+    try:
+        from dotenv import load_dotenv
+        env_file = Path(__file__).resolve().parent.parent / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+    except ImportError:
+        pass
+
+    token = get_secret("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN is not configured. Cannot start Telegram bot.")
+        return
+
+    admin_id = get_secret("TELEGRAM_ADMIN_ID") or os.getenv("TELEGRAM_ADMIN_ID")
+    logger.info(f"Starting Telegram bot listener. Admin ID configured: {admin_id}")
+
+    base_url = f"https://api.telegram.org/bot{token}"
+    offset = 0
+
+    with httpx.Client(timeout=35.0) as client:
+        try:
+            me = client.get(f"{base_url}/getMe").json()
+            if me.get("ok"):
+                username = me["result"].get("username", "bot")
+                first_name = me["result"].get("first_name", "")
+                logger.info(f"✅ Bot connected to Telegram as @{username} ({first_name}). Awaiting commands...")
+            else:
+                logger.error(f"Failed to authenticate bot: {me}")
+                return
+        except Exception as e:
+            logger.error(f"Network error connecting to Telegram: {e}")
+            return
+
+        while True:
+            try:
+                resp = client.get(
+                    f"{base_url}/getUpdates",
+                    params={"offset": offset, "timeout": 25},
+                )
+                if resp.status_code != 200:
+                    time.sleep(2)
+                    continue
+
+                updates = resp.json().get("result", [])
+                for upd in updates:
+                    offset = upd["update_id"] + 1
+
+                    # 1. Handle Callback Queries (Inline buttons)
+                    if "callback_query" in upd:
+                        cb = upd["callback_query"]
+                        cb_id = cb["id"]
+                        data = cb.get("data", "")
+                        from_user = cb.get("from", {}).get("id", 0)
+                        chat_id = cb.get("message", {}).get("chat", {}).get("id")
+
+                        logger.info(f"Callback query '{data}' from {from_user}")
+                        if not check_admin_auth(from_user):
+                            client.post(
+                                f"{base_url}/answerCallbackQuery",
+                                json={"callback_query_id": cb_id, "text": "⛔️ Unauthorized.", "show_alert": True},
+                            )
+                            continue
+
+                        res = handle_callback_query(data)
+                        client.post(
+                            f"{base_url}/answerCallbackQuery",
+                            json={"callback_query_id": cb_id, "text": "Action executed."},
+                        )
+                        if chat_id and res.get("text"):
+                            client.post(
+                                f"{base_url}/sendMessage",
+                                json={"chat_id": chat_id, "text": res["text"], "parse_mode": "Markdown"},
+                            )
+                        continue
+
+                    # 2. Handle Text Messages / Commands
+                    if "message" in upd and "text" in upd["message"]:
+                        msg = upd["message"]
+                        msg_id = msg["message_id"]
+                        chat_id = msg["chat"]["id"]
+                        from_user = msg.get("from", {}).get("id", chat_id)
+                        text = msg["text"].strip()
+
+                        if not text.startswith("/"):
+                            continue
+
+                        parts = text.split()
+                        cmd = parts[0]
+                        args = parts[1:]
+
+                        logger.info(f"Command '{cmd}' from {from_user}")
+                        res = handle_command(user_id=from_user, command=cmd, args=args)
+                        reply_text = res.get("text", "")
+
+                        if reply_text:
+                            # Send reply
+                            send_res = client.post(
+                                f"{base_url}/sendMessage",
+                                json={"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"},
+                            )
+                            if send_res.status_code != 200:
+                                client.post(
+                                    f"{base_url}/sendMessage",
+                                    json={"chat_id": chat_id, "text": reply_text},
+                                )
+
+                        # Auto-delete sensitive key messages for security hygiene
+                        if res.get("delete_msg", False):
+                            try:
+                                client.post(
+                                    f"{base_url}/deleteMessage",
+                                    json={"chat_id": chat_id, "message_id": msg_id},
+                                )
+                                logger.info(f"Auto-deleted sensitive key message {msg_id}")
+                            except Exception as del_err:
+                                logger.warning(f"Could not delete message: {del_err}")
+
+            except (httpx.TimeoutException, httpx.ReadTimeout):
+                continue
+            except Exception as e:
+                logger.warning(f"Telegram polling loop notice: {e}")
+                time.sleep(2)
+
+
+if __name__ == "__main__":
+    run_bot()
 

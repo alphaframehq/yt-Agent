@@ -32,6 +32,24 @@ def handle_codespace_command(args: List[str]) -> str:
     subcmd = args[0].lower()
 
     if subcmd == "list":
+        gh_pat = os.getenv("GH_PAT")
+        if gh_pat:
+            try:
+                import httpx
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.get(
+                        "https://api.github.com/user/codespaces",
+                        headers={"Authorization": f"Bearer {gh_pat}", "Accept": "application/vnd.github.v3+json"},
+                    )
+                    if resp.status_code == 200:
+                        cs_data = resp.json().get("codespaces", [])
+                        if not cs_data:
+                            return "💻 *Active Codespaces:*\n```\nNo active codespaces running. (0 billed hours)\n```"
+                        lines = [f"• `{c.get('name')}`: {c.get('state')} ({c.get('machine', {}).get('display_name', '2-core')})" for c in cs_data]
+                        return "💻 *Active Codespaces:*\n" + "\n".join(lines)
+            except Exception:
+                pass
+
         try:
             env = os.environ.copy()
             if "GH_TOKEN" not in env and "GH_PAT" in env:
@@ -43,6 +61,13 @@ def handle_codespace_command(args: List[str]) -> str:
             return f"💻 *Codespaces Status:*\n```\n{res.stderr.strip() or 'No active codespaces.'}\n```"
         except Exception as e:
             return f"💻 *Codespaces Status:*\nAll production runs are executing on GitHub Actions runners. (CLI: {e})"
+
+    elif subcmd in ("create", "new"):
+        return (
+            "🛠 *To launch a Codespace in browser:*\n\n"
+            "👉 [Click here to launch GitHub Codespace](https://github.com/codespaces/new?repo=alphaframehq/yt-Agent)\n\n"
+            "_Pre-configured with Python 3.11, AWS CLI, and auto-idle shutdown (10 min)._"
+        )
 
     elif subcmd == "stop":
         name = args[1] if len(args) > 1 else os.getenv("CODESPACE_NAME", "")
