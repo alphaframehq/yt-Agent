@@ -86,6 +86,24 @@ def send_telegram_notification(
             else:
                 logger.warning(f"Telegram API responded with status {resp.status}")
                 return False
+    except urllib.error.HTTPError as e:
+        if e.code == 400 and payload.get("parse_mode"):
+            # Retry without parse_mode to ensure delivery even if special characters break Markdown
+            payload.pop("parse_mode", None)
+            try:
+                retry_req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(retry_req, timeout=10) as resp2:
+                    if resp2.status == 200:
+                        logger.info("Telegram notification sent successfully (plain text fallback).")
+                        return True
+            except Exception as e2:
+                logger.error(f"Telegram fallback delivery failed: {e2}")
+        logger.error(f"Failed to send Telegram notification: {e}")
+        return False
     except urllib.error.URLError as e:
         logger.error(f"Failed to send Telegram notification: {e}")
         return False

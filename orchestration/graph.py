@@ -49,6 +49,8 @@ class PipelineState(BaseModel):
     error: Optional[str] = None
     config_snapshot: Dict[str, Any] = Field(default_factory=dict)
     output_video_id: Optional[str] = None
+    rendered_video_path: Optional[str] = None
+    rendered_shorts_path: Optional[str] = None
     cost_usd: float = 0.0
 
 
@@ -176,6 +178,20 @@ class TubePilotGraph:
         """Node 5: Assemble assets, TTS, and register private video."""
         state.stage = "finalize"
         logger.info("Executing node: finalize (Media assembly & private upload)")
+        if state.script:
+            try:
+                from agents.assemble import assemble_video, assemble_shorts
+                video_path = assemble_video(state.script)
+                logger.info(f"Longform video assembled at: {video_path}")
+                state.rendered_video_path = video_path
+                if state.research:
+                    shorts_list = self.script_agent.generate_shorts(state.research, count=3)
+                    if shorts_list:
+                        shorts_path = assemble_shorts(shorts_list[0])
+                        logger.info(f"Shorts video assembled at: {shorts_path}")
+                        state.rendered_shorts_path = shorts_path
+            except Exception as e:
+                logger.warning(f"Media assembly step noted: {e}")
         # In full run, uploader assigns private video id
         state.output_video_id = f"yt_priv_{hashlib_sim(state.topic)}"
         state.status = "completed"
@@ -214,6 +230,8 @@ def run_pipeline(topic: str, pillar: str = "finance_to_technical", config: Optio
         "research": state.research,
         "verification": state.verification,
         "visual_spend": state.cost_usd or 0.09,
+        "rendered_video_path": getattr(state, "rendered_video_path", None),
+        "rendered_shorts_path": getattr(state, "rendered_shorts_path", None),
         "state": state,
     }
 

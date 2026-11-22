@@ -18,6 +18,12 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
+except ImportError:
+    pass
+
 from config_manager import snapshot_config
 from orchestration.graph import run_pipeline
 from db.dynamo import dequeue_next_topic, get_topic_queue
@@ -92,6 +98,12 @@ def main() -> int:
 
         if status == "complete" and video_id:
             logger.info(f"✅ Pipeline succeeded! YouTube Video ID: {video_id}")
+            rendered_video = result.get("rendered_video_path")
+            rendered_shorts = result.get("rendered_shorts_path")
+            if rendered_video:
+                logger.info(f"🎬 Longform Video File: {rendered_video}")
+            if rendered_shorts:
+                logger.info(f"📱 Shorts Video File: {rendered_shorts}")
             title = getattr(script.seo, "title", f"{topic} Breakdown") if script else topic
             duration = getattr(script, "total_duration_sec", 600.0) if script else 600.0
             spend = result.get("visual_spend", 0.09)
