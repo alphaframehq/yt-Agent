@@ -2,6 +2,8 @@ name: TubePilot AI Telegram Bot Cloud Runner
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
   schedule:
     # Continuous cloud guardian: restart every 4 hours to ensure 100% 24/7 uptime
     - cron: '0 */4 * * *'
