@@ -54,8 +54,13 @@ def get_system_ping() -> Dict[str, Any]:
 
     elapsed = round(time.perf_counter() - t_start, 2)
 
+    import os
+    run_id = os.getenv("GITHUB_RUN_ID")
+    host_env = f"GitHub Actions Cloud (Runner #{run_id})" if os.getenv("GITHUB_ACTIONS") == "true" else "Local / Codespace"
+
     report_text = (
         f"⚡️ *TUBEPILOT AI // SYSTEM HEALTH REPORT* ({elapsed}s)\n\n"
+        f"• *Host Environment:* `{host_env}`\n"
         f"• *Scheduler Status:* {'⏸ PAUSED' if is_paused else '▶️ ACTIVE'}\n"
         f"• *Active Verify Model:* `{active_verify}`\n"
         f"• *DynamoDB:* {dynamo_status}\n"

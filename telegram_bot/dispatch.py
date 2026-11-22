@@ -33,9 +33,13 @@ def dispatch_pipeline_run(topic: str, pillar: str = "finance_to_technical") -> D
     )
 
     # 3. Call GitHub Actions API
-    gh_pat = get_secret("GH_PAT") or os.getenv("GH_PAT")
-    repo_owner = os.getenv("GH_REPO_OWNER", "alphaframehq")
-    repo_name = os.getenv("GH_REPO_NAME", "yt-agent")
+    gh_pat = get_secret("GH_PAT") or os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
+    full_repo = os.getenv("GITHUB_REPOSITORY", "")
+    if "/" in full_repo:
+        repo_owner, repo_name = full_repo.split("/", 1)
+    else:
+        repo_owner = os.getenv("GH_REPO_OWNER", "alphaframehq")
+        repo_name = os.getenv("GH_REPO_NAME", "yt-Agent")
 
     dispatched = False
     details = ""

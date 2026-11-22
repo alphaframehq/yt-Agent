@@ -48,6 +48,7 @@ public_key = public.PublicKey(public_key_b64.encode("utf-8"), encoding.Base64Enc
 # 2. Encrypt and upload each secret
 SECRETS_TO_SYNC = [
     "MASTER_SECRET",
+    "GH_PAT",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_ADMIN_ID",
     "AWS_REGION",

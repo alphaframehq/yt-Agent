@@ -1,0 +1,75 @@
+name: TubePilot AI Telegram Bot Cloud Runner
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Continuous cloud guardian: restart every 4 hours to ensure 100% 24/7 uptime
+    - cron: '0 */4 * * *'
+
+concurrency:
+  group: telegram-bot-cloud-runner
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  run-cloud-bot:
+    name: Run Telegram Bot Listener in Cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+
+    env:
+      MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO_OWNER: "alphaframehq"
+      GH_REPO_NAME: "yt-Agent"
+      AWS_REGION: ${{ secrets.AWS_REGION || 'ap-southeast-2' }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+      PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
+      TINYFISH_API_KEY: ${{ secrets.TINYFISH_API_KEY }}
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Dependencies (FFmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Notify Bot Launch to Telegram
+        run: |
+          python -c "
+          from scripts.notify import send_telegram_notification
+          send_telegram_notification('🚀 *TubePilot AI Bot Online in GitHub Actions Cloud!*\n\n• Runner ID: \`${{ github.run_id }}\`\n• Branch: \`${{ github.ref_name }}\`\n• Host: GitHub Actions Headless Linux\n• Status: Listening 24/7 in the cloud.')
+          " || true
+
+      - name: Run Telegram Bot Listener
+        run: |
+          # Listen for 3.5 hours (12600s), then cleanly retrigger and handover
+          python -u telegram_bot/bot.py --run-duration 12600
+
+      - name: Retrigger Next Cloud Runner
+        if: always() && !cancelled()
+        run: |
+          gh workflow run bot.yml --repo alphaframehq/yt-Agent --ref main || true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}

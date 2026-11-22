@@ -32,6 +32,9 @@ jobs:
       MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      GH_REPO_OWNER: "alphaframehq"
+      GH_REPO_NAME: "yt-Agent"
       AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'ap-southeast-2' }}
       AWS_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'ap-southeast-2' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

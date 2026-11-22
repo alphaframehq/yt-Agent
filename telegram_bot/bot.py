@@ -601,7 +601,41 @@ def _handle_cta_command(args: List[str]) -> Dict[str, Any]:
         return {"text": f"❌ Error saving CTA: {e}", "delete_msg": False}
 
 
-def run_bot() -> None:
+def _retrigger_github_actions_bot() -> bool:
+    """Dispatches the next GitHub Actions bot runner workflow before runner timeout."""
+    gh_pat = get_secret("GH_PAT") or os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
+    full_repo = os.getenv("GITHUB_REPOSITORY", "")
+    if "/" in full_repo:
+        owner, repo = full_repo.split("/", 1)
+    else:
+        owner = os.getenv("GH_REPO_OWNER", "alphaframehq")
+        repo = os.getenv("GH_REPO_NAME", "yt-Agent")
+
+    if not gh_pat:
+        logger.warning("Cannot retrigger bot workflow: GH_PAT/GITHUB_TOKEN missing.")
+        return False
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/bot.yml/dispatches"
+    try:
+        import httpx
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post(
+                url,
+                headers={"Authorization": f"Bearer {gh_pat}", "Accept": "application/vnd.github.v3+json"},
+                json={"ref": "main"},
+            )
+            if resp.status_code == 204:
+                logger.info("✅ Successfully dispatched next continuous GitHub Actions bot runner!")
+                return True
+            else:
+                logger.warning(f"Could not dispatch bot workflow ({resp.status_code}): {resp.text}")
+                return False
+    except Exception as e:
+        logger.error(f"Error dispatching next bot workflow: {e}")
+        return False
+
+
+def run_bot(max_duration_seconds: Optional[int] = None) -> None:
     """Run Telegram bot listener in continuous long-polling mode."""
     import time
     import httpx
@@ -621,10 +655,13 @@ def run_bot() -> None:
         return
 
     admin_id = get_secret("TELEGRAM_ADMIN_ID") or os.getenv("TELEGRAM_ADMIN_ID")
-    logger.info(f"Starting Telegram bot listener. Admin ID configured: {admin_id}")
+    is_gh_actions = os.getenv("GITHUB_ACTIONS") == "true"
+    run_id = os.getenv("GITHUB_RUN_ID", "local")
+    logger.info(f"Starting Telegram bot listener (Admin: {admin_id}, GH Actions: {is_gh_actions}, Run: {run_id})")
 
     base_url = f"https://api.telegram.org/bot{token}"
     offset = 0
+    start_time = time.time()
 
     with httpx.Client(timeout=35.0) as client:
         try:
@@ -641,6 +678,12 @@ def run_bot() -> None:
             return
 
         while True:
+            # Check maximum duration timeout for cloud runner rotation
+            if max_duration_seconds and (time.time() - start_time) >= max_duration_seconds:
+                logger.info(f"Cloud runner duration limit reached ({max_duration_seconds}s). Handing over...")
+                _retrigger_github_actions_bot()
+                break
+
             try:
                 resp = client.get(
                     f"{base_url}/getUpdates",
@@ -774,4 +817,9 @@ def run_bot() -> None:
 
 
 if __name__ == "__main__":
-    run_bot()
+    import argparse
+    parser = argparse.ArgumentParser(description="TubePilot Telegram Bot")
+    parser.add_argument("--run-duration", type=int, default=0, help="Max seconds to run before cleanly exiting (0 for infinite)")
+    parsed_args, _ = parser.parse_known_args()
+    dur = parsed_args.run_duration if parsed_args.run_duration > 0 else None
+    run_bot(max_duration_seconds=dur)
