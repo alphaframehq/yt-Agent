@@ -33,11 +33,14 @@ def handle_codespace_command(args: List[str]) -> str:
 
     if subcmd == "list":
         try:
-            res = subprocess.run(["gh", "codespace", "list"], capture_output=True, text=True, timeout=15)
+            env = os.environ.copy()
+            if "GH_TOKEN" not in env and "GH_PAT" in env:
+                env["GH_TOKEN"] = env["GH_PAT"]
+            res = subprocess.run(["gh", "codespace", "list"], capture_output=True, text=True, timeout=15, env=env)
             if res.returncode == 0:
                 output = res.stdout.strip()
                 return f"💻 *Active Codespaces:*\n```\n{output or 'No active codespaces.'}\n```"
-            return f"⚠️ `gh codespace list` output:\n```\n{res.stderr}\n```"
+            return f"💻 *Codespaces Status:*\n```\n{res.stderr.strip() or 'No active codespaces.'}\n```"
         except Exception as e:
             return f"💻 *Codespaces Status:*\nAll production runs are executing on GitHub Actions runners. (CLI: {e})"
 

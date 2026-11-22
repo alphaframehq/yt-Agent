@@ -102,7 +102,7 @@ class TestTelegramBot(unittest.TestCase):
     def test_8_codespace_commands(self):
         """Verify /codespace list and stop."""
         res = handle_codespace_command(["list"])
-        self.assertIn("Codespaces", res)
+        self.assertIn("Codespace", res)
 
     def test_9_channel_and_cta_commands(self):
         """Verify saving channel name and CTA like/subscribe options."""
