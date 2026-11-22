@@ -32,11 +32,13 @@ jobs:
       MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
-      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'ap-southeast-2' }}
+      AWS_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'ap-southeast-2' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
       OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+      TINYFISH_API_KEY: ${{ secrets.TINYFISH_API_KEY }}
       PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}

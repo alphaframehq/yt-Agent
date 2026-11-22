@@ -20,13 +20,12 @@ from loguru import logger
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "active_models": {
-        "verify": "bedrock/claude-3-5-haiku",
+        "verify": "gemini/gemini-2.0-flash",
         "script": "gemini/gemini-2.0-flash",
         "image": "gemini/imagen-3.0-generate-001",
         "research": "tinyfish",
     },
     "verify_chain": [
-        ["bedrock", "claude-3-5-haiku"],
         ["gemini", "gemini-2.0-flash"],
         ["gemini", "gemini-2.5-flash-lite"],
         ["openrouter", "deepseek/deepseek-chat:free"],
