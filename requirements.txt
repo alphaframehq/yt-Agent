@@ -29,6 +29,7 @@ python-telegram-bot>=20.0
 
 # YouTube
 google-api-python-client>=2.100
+google-auth>=2.0
 google-auth-oauthlib>=1.1
 
 # Database
@@ -49,3 +50,4 @@ langchain-core>=0.2
 # Image APIs
 replicate>=0.25
 fal-client>=0.4
+

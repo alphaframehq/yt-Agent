@@ -1,34 +1,50 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 — Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
-# Source: alphaframehq/yt-Agent @ main c39f42541b8e784dcf41c09583dc57227be07667
-# Fixes audit P0 #13/#14/#15 (task slice #14/#15/#16/#17):
-# - upload_private() raises on no service / any upload exception; no
-#   yt_sim_ fake IDs are ever returned.
-# - publish_public()/delete_video() raise when unauthenticated and return
-#   False only for a real API failure.
-# - _get_youtube_service() NO LONGER passes YT_CLIENT_SECRET as
-#   developerKey: YT_CLIENT_SECRET is an OAuth client secret, NOT an API
-#   key, and an API key cannot authorise writes. Real OAuth2 (stored
-#   refresh token, YT_REFRESH_TOKEN env) is UNIMPLEMENTED and required —
-#   the function raises stating exactly that. No OAuth credentials or
-#   tokens are invented here.
-# - research_topic() raises on no service / API exception / zero results,
-#   returns only real titles, and no longer writes/reads fabricated
-#   results to cache/youtube/ (the old cache persisted invented titles).
-# - New verify_video_exists() helper (real videos.list check) so callers
-#   can confirm a YouTube copy exists before purging local media.
+# LOCAL PRODUCTION PATCH — 2026-11-25 — PR #3 (branch feat/youtube-oauth2-upload).
+# Implements real YouTube OAuth2 (refresh-token flow) + resumable chunked
+# upload, replacing the PR #1 placeholder that always raised
+# "YouTube OAuth2 is not implemented" in _get_youtube_service().
+# - _get_youtube_service() builds google.oauth2.credentials.Credentials
+#   from YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN env vars,
+#   refreshes the access token, and passes credentials=... (never
+#   developerKey=...) to build(). Missing creds or a failed refresh
+#   raise RuntimeError naming the missing variable / failure only —
+#   credential VALUES are never logged, printed, or included in any
+#   error message.
+# - upload_private() now performs a real resumable upload via
+#   request.next_chunk() in a loop (1 MiB chunks), logging progress,
+#   retrying retriable HTTP 500/502/503/504 + connection errors up to
+#   5 attempts with backoff, and raising RuntimeError on any other
+#   API error, on an empty response, or on a simulated yt_sim_ ID.
+# - No video has been uploaded to YouTube with this code yet: a live
+#   Codespace run with the real stored secrets is still required
+#   before upload can be proven. No credentials or tokens are
+#   invented here.
 """YouTube Data API v3 integration for TubePilot AI.
 
 Handles:
 - Competitor topic analysis (search.list + videos.list)
-- Private video uploads with thumbnail attachments
+- Private video uploads with thumbnail attachments (resumable upload)
 - Publication status transitions (Private -> Public)
 - Deletion / purge operations
+
+Auth: real OAuth2 via a stored refresh token. YT_CLIENT_ID,
+YT_CLIENT_SECRET and YT_REFRESH_TOKEN must be set in the environment
+(e.g. GitHub Codespaces secrets). No API key is used: an API key
+(developerKey) is read-only and can never authorise writes.
 """
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -40,35 +56,151 @@ __all__ = [
     "verify_video_exists",
 ]
 
+# Scopes granted on the GCP OAuth consent screen (TubePilot AI):
+# youtube.upload for uploads, youtube for reads / publish / delete.
+_YT_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube",
+]
+_YT_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+# Resumable-upload tuning. Chunk size must be a multiple of 256 KiB.
+_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MiB
+_MAX_UPLOAD_ATTEMPTS = 5
+_RETRIABLE_UPLOAD_STATUSES = frozenset({500, 502, 503, 504})
+
 
 def _get_youtube_service():
-    """Build and return an authorized YouTube Resource.
+    """Build and return an authorized YouTube Resource (OAuth2).
+
+    Reads YT_CLIENT_ID, YT_CLIENT_SECRET and YT_REFRESH_TOKEN from the
+    environment, builds refresh-token Credentials, refreshes the
+    access token, and passes ``credentials=...`` (never
+    ``developerKey=...``) to ``build("youtube", "v3", ...)``.
 
     Raises:
-        RuntimeError: always, until real OAuth2 is implemented. The
-        original code passed YT_CLIENT_SECRET as ``developerKey`` to
-        ``build("youtube", "v3", developerKey=client_secret)`` — that is
-        wrong in two ways: (1) YT_CLIENT_SECRET is an OAuth client
-        secret, NOT an API key, and must never be sent as developerKey;
-        (2) an API key (developerKey) is read-only and can never
-        authorise uploads / publish / delete, which require OAuth2 user
-        credentials. Real OAuth2 is UNIMPLEMENTED: it requires building
-        google.oauth2.credentials.Credentials from YT_CLIENT_ID,
-        YT_CLIENT_SECRET and a stored refresh token (YT_REFRESH_TOKEN
-        env / secrets store — placeholder name only, no value here),
-        refreshing it as needed, and passing ``credentials=...`` (never
-        ``developerKey=...``) to build(). Implement that here and remove
-        this raise; do not invent credentials or fake a token.
+        RuntimeError: any credential is missing, the token refresh
+            fails, the refreshed credentials are invalid, or the
+            service cannot be built. Error messages name the missing
+            variable / failure only — credential values are never
+            included.
     """
-    raise RuntimeError(
-        "YouTube OAuth2 is not implemented: uploads, publish, delete "
-        "and authenticated reads require OAuth2 user credentials "
-        "(YT_CLIENT_ID + YT_CLIENT_SECRET + stored refresh token "
-        "YT_REFRESH_TOKEN). YT_CLIENT_SECRET must NOT be used as an API "
-        "key (developerKey) — it is an OAuth client secret, and an API "
-        "key cannot authorise writes. Implement real OAuth2 in "
-        "_get_youtube_service() before using any write operation."
+    client_id = os.environ.get("YT_CLIENT_ID")
+    client_secret = os.environ.get("YT_CLIENT_SECRET")
+    refresh_token = os.environ.get("YT_REFRESH_TOKEN")
+    missing = [
+        name
+        for name, value in (
+            ("YT_CLIENT_ID", client_id),
+            ("YT_CLIENT_SECRET", client_secret),
+            ("YT_REFRESH_TOKEN", refresh_token),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "YouTube OAuth2 credentials missing from environment: "
+            + ", ".join(missing)
+            + ". Set YT_CLIENT_ID, YT_CLIENT_SECRET and YT_REFRESH_TOKEN "
+            "(e.g. as GitHub Codespaces secrets) before any YouTube "
+            "upload, publish, delete or authenticated read."
+        )
+
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri=_YT_TOKEN_URI,
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=_YT_SCOPES,
     )
+    try:
+        creds.refresh(Request())
+    except RefreshError as e:
+        raise RuntimeError(
+            "YouTube OAuth2 token refresh failed: the stored refresh "
+            "token may be expired or revoked — re-authorise and store "
+            f"a fresh YT_REFRESH_TOKEN. Underlying error: {e}"
+        ) from e
+    except Exception as e:
+        raise RuntimeError(f"YouTube OAuth2 token refresh failed: {e}") from e
+    if not creds.valid:
+        raise RuntimeError(
+            "YouTube OAuth2 credentials are not valid after refresh; "
+            "re-authorise and store a fresh YT_REFRESH_TOKEN."
+        )
+    try:
+        return build("youtube", "v3", credentials=creds)
+    except Exception as e:
+        raise RuntimeError(f"Failed to build YouTube API service: {e}") from e
+
+
+def _execute_resumable_upload(request, video_path: str) -> Dict[str, Any]:
+    """Drive a resumable videos.insert request to completion.
+
+    Loops ``request.next_chunk()`` until the API returns the upload
+    response, logging progress. Retriable failures (HTTP 500/502/503/
+    504 and connection errors) are retried up to
+    ``_MAX_UPLOAD_ATTEMPTS`` with exponential backoff; every other
+    API error raises immediately. A finished upload with no video ID
+    raises — an empty response is never treated as success.
+
+    Returns:
+        The videos.insert response dict (must contain ``"id"``).
+
+    Raises:
+        RuntimeError: upload failed, was exhausted by retries, or
+            finished without a video ID.
+    """
+    response = None
+    attempt = 0
+    while response is None:
+        attempt += 1
+        try:
+            status, response = request.next_chunk()
+        except HttpError as e:
+            status_code = getattr(e.resp, "status", None)
+            if (
+                status_code in _RETRIABLE_UPLOAD_STATUSES
+                and attempt < _MAX_UPLOAD_ATTEMPTS
+            ):
+                wait = min(2**attempt, 30)
+                logger.warning(
+                    f"YouTube upload hit retriable HTTP {status_code} "
+                    f"(attempt {attempt}/{_MAX_UPLOAD_ATTEMPTS}); "
+                    f"retrying in {wait}s."
+                )
+                time.sleep(wait)
+                continue
+            raise RuntimeError(
+                f"YouTube upload failed for '{video_path}': "
+                f"HTTP {status_code}: {e}"
+            ) from e
+        except (ConnectionError, TimeoutError, OSError) as e:
+            if attempt < _MAX_UPLOAD_ATTEMPTS:
+                wait = min(2**attempt, 30)
+                logger.warning(
+                    f"YouTube upload hit a connection error "
+                    f"(attempt {attempt}/{_MAX_UPLOAD_ATTEMPTS}): {e}; "
+                    f"retrying in {wait}s."
+                )
+                time.sleep(wait)
+                continue
+            raise RuntimeError(
+                f"YouTube upload failed for '{video_path}': connection "
+                f"error after {attempt} attempts: {e}"
+            ) from e
+        if status is not None:
+            logger.info(
+                f"YouTube upload progress: {int(status.progress() * 100)}%"
+            )
+
+    if not isinstance(response, dict) or not response.get("id"):
+        raise RuntimeError(
+            f"YouTube upload finished without a video ID in its response "
+            f"for '{video_path}'; the upload cannot be treated as successful."
+        )
+    return response
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=5))
@@ -82,7 +214,7 @@ def research_topic(topic: str) -> Dict[str, Any]:
     invented titles/tags/gaps are returned, and nothing is cached to
     cache/youtube/ (the old cache persisted fabricated results).
     """
-    service = _get_youtube_service()  # Raises: OAuth2 unimplemented.
+    service = _get_youtube_service()  # Raises on missing creds / refresh failure.
     try:
         search_response = service.search().list(
             q=topic,
@@ -120,26 +252,26 @@ def research_topic(topic: str) -> Dict[str, Any]:
     }
 
 def upload_private(video_path: str, thumb_path: Optional[str], seo_data: Dict[str, Any]) -> str:
-    """Upload video to YouTube set to PRIVATE status.
+    """Upload video to YouTube set to PRIVATE status, via resumable upload.
 
     Returns:
         yt_video_id (str) — the real ID returned by the YouTube API.
 
     Raises:
         FileNotFoundError: video file does not exist.
-        RuntimeError: no authenticated service (OAuth2 unimplemented)
-            or any upload exception. No fake yt_sim_ ID is returned.
+        RuntimeError: no authenticated service (missing OAuth2 creds /
+            failed token refresh), any upload API error, an upload
+            that finishes without a video ID, or a simulated ID.
+            No fake yt_sim_ ID is ever returned.
     """
     p = Path(video_path)
     if not p.exists():
         raise FileNotFoundError(f"Video file not found at: {video_path}")
 
     logger.info(f"Uploading private video to YouTube: {seo_data.get('title')}")
-    # Raises RuntimeError when unauthenticated / OAuth2 unimplemented —
-    # deliberately outside any try/except so it is never swallowed.
+    # Raises RuntimeError when unauthenticated — deliberately outside
+    # any try/except so it is never swallowed.
     service = _get_youtube_service()
-
-    from googleapiclient.http import MediaFileUpload
 
     body = {
         "snippet": {
@@ -154,13 +286,16 @@ def upload_private(video_path: str, thumb_path: Optional[str], seo_data: Dict[st
         },
     }
 
-    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
-    request = service.videos().insert(part="snippet,status", body=body, media_body=media)
-    response = request.execute()  # Any exception propagates to the caller.
+    media = MediaFileUpload(
+        video_path, chunksize=_UPLOAD_CHUNK_SIZE, resumable=True
+    )
+    request = service.videos().insert(
+        part="snippet,status", body=body, media_body=media
+    )
+    # Raises RuntimeError on any API error / empty response.
+    response = _execute_resumable_upload(request, video_path)
     video_id = response.get("id")
 
-    if not video_id:
-        raise RuntimeError("YouTube upload returned no video ID in its response.")
     if str(video_id).startswith("yt_sim_"):
         raise RuntimeError(f"YouTube upload returned a simulated video ID ({video_id}); refusing it.")
 
@@ -188,7 +323,7 @@ def verify_video_exists(yt_video_id: str) -> bool:
             f"Refusing to verify simulated video ID '{yt_video_id}': "
             "only real YouTube IDs can be verified."
         )
-    # Raises RuntimeError when unauthenticated / OAuth2 unimplemented.
+    # Raises RuntimeError when unauthenticated.
     service = _get_youtube_service()
     response = service.videos().list(part="id", id=yt_video_id).execute()
     items = response.get("items", [])
@@ -198,7 +333,7 @@ def verify_video_exists(yt_video_id: str) -> bool:
 def publish_public(yt_video_id: str) -> bool:
     """Change video privacyStatus from PRIVATE to PUBLIC.
 
-    Raises when unauthenticated (OAuth2 unimplemented). Returns False
+    Raises when unauthenticated. Returns False
     only for a real API failure.
     """
     logger.info(f"Publishing YouTube video {yt_video_id} to PUBLIC.")
@@ -219,7 +354,7 @@ def publish_public(yt_video_id: str) -> bool:
 def delete_video(yt_video_id: str) -> bool:
     """Delete video from YouTube.
 
-    Raises when unauthenticated (OAuth2 unimplemented). Returns False
+    Raises when unauthenticated. Returns False
     only for a real API failure.
     """
     logger.info(f"Deleting YouTube video {yt_video_id}.")
