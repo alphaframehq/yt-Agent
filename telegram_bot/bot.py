@@ -702,17 +702,15 @@ def _handle_model_command(args: List[str]) -> Dict[str, Any]:
             "✨ *Quick Switch Commands:*",
             "• `/model gemini-2.0` — Set all text models to Gemini 2.0 Flash",
             "• `/model gemini-2.5` — Set all text models to Gemini 2.5 Flash Lite",
-            "• `/model deepseek` — Set all text models to DeepSeek V3",
-            "• `/model deepseek-r1` — Set all text models to DeepSeek R1",
-            "• `/model script deepseek` — Set only script model",
+            "• `/model free` — Set all text models to the free OpenRouter model",
+            "• `/model script free` — Set only script model",
             "• `/model verify gemini-2.0` — Set only verification model",
             "• `/model reset` — Reset to default configuration",
         ]
         buttons = [
             {"text": "⚡️ Gemini 2.0", "callback_data": "mdl_gemini-2.0"},
             {"text": "🚀 Gemini 2.5 Lite", "callback_data": "mdl_gemini-2.5"},
-            {"text": "🧠 DeepSeek V3", "callback_data": "mdl_deepseek"},
-            {"text": "🧪 DeepSeek R1", "callback_data": "mdl_deepseek-r1"},
+            {"text": "🆓 Free Model", "callback_data": "mdl_free"},
             {"text": "🔄 Reset Defaults", "callback_data": "mdl_reset"},
             {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
         ]
@@ -733,10 +731,11 @@ def _handle_model_command(args: List[str]) -> Dict[str, Any]:
             return "gemini/gemini-2.0-flash"
         elif t in ("gemini-2.5", "gemini-2.5-lite", "lite", "flash-lite"):
             return "gemini/gemini-2.5-flash-lite"
-        elif t in ("deepseek", "deepseek-chat", "deepseek-v3", "v3"):
-            return "openrouter/deepseek/deepseek-chat"
-        elif t in ("deepseek-r1", "r1", "reasoner"):
-            return "openrouter/deepseek/deepseek-r1"
+        elif t in ("free", "openrouter-free", "deepseek", "deepseek-chat", "deepseek-v3", "v3", "deepseek-r1", "r1", "reasoner"):
+            # No free DeepSeek model exists on OpenRouter anymore
+            # (deepseek/deepseek-chat:free is gone; deepseek-chat is paid),
+            # so free-model requests route via OpenRouter's free router.
+            return "openrouter/openrouter/free"
         elif t in ("claude", "haiku", "claude-3.5", "bedrock"):
             return "openrouter/anthropic/claude-3.5-haiku"
         elif t in ("imagen", "imagen-3", "imagen3"):

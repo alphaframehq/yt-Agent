@@ -239,7 +239,7 @@ def chat_with_agent(user_id: int | str, user_prompt: str) -> str:
     chain = [
         ["gemini", "gemini-2.0-flash"],
         ["gemini", "gemini-2.5-flash-lite"],
-        ["openrouter", "deepseek/deepseek-chat"],
+        ["openrouter", "openrouter/free"],
     ]
 
     try:
