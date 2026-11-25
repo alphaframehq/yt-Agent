@@ -105,7 +105,7 @@ def _handle_menu_command(args: Optional[List[str]] = None) -> Dict[str, Any]:
     """Render the Main Interactive Control Deck."""
     branding = get_channel_branding()
     models = get_config("active_models") or {}
-    script_model = models.get("script", "gemini-2.0-flash").split("/")[-1]
+    script_model = models.get("script", "gemini-3.8-flash").split("/")[-1]
     is_paused = bool(get_config("paused", False))
     status_emoji = "⏸ PAUSED" if is_paused else "▶️ ACTIVE"
     topics = list_topics_queue(status="pending")
@@ -653,7 +653,7 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
         if target_mdl == "reset":
             reset_config()
             return {
-                "text": "🔄 Model routing reset to default Gemini 2.0 Flash configuration.",
+                "text": "🔄 Model routing reset to default Gemini 3.8 Flash configuration.",
                 "buttons": [{"text": "⬅️ Back to Menu", "callback_data": "menu_main"}],
             }
         res = _handle_model_command([target_mdl])
@@ -685,31 +685,31 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
 def _handle_model_command(args: List[str]) -> Dict[str, Any]:
     """Subcommand handler for /model."""
     models = get_config("active_models") or {
-        "research": "gemini/gemini-2.0-flash",
-        "script": "gemini/gemini-2.0-flash",
-        "verify": "gemini/gemini-2.0-flash",
+        "research": "gemini/gemini-3.8-flash",
+        "script": "gemini/gemini-3.8-flash",
+        "verify": "gemini/gemini-3.8-flash",
         "image": "gemini/imagen-3.0-generate-001",
     }
 
     if not args or args[0].lower() in ("list", "status", "show"):
         lines = [
             "🤖 *Active AI Model Routing:*",
-            f"• *Research:* `{models.get('research', 'gemini/gemini-2.0-flash')}`",
-            f"• *Script:* `{models.get('script', 'gemini/gemini-2.0-flash')}`",
-            f"• *Verify:* `{models.get('verify', 'gemini/gemini-2.0-flash')}`",
+            f"• *Research:* `{models.get('research', 'gemini/gemini-3.8-flash')}`",
+            f"• *Script:* `{models.get('script', 'gemini/gemini-3.8-flash')}`",
+            f"• *Verify:* `{models.get('verify', 'gemini/gemini-3.8-flash')}`",
             f"• *Image:* `{models.get('image', 'gemini/imagen-3.0-generate-001')}`",
             "",
             "✨ *Quick Switch Commands:*",
-            "• `/model gemini-2.0` — Set all text models to Gemini 2.0 Flash",
-            "• `/model gemini-2.5` — Set all text models to Gemini 2.5 Flash Lite",
+            "• `/model gemini-3.8` — Set all text models to Gemini 3.8 Flash",
+            "• `/model gemini-3.5-lite` — Set all text models to Gemini 3.5 Flash Lite",
             "• `/model free` — Set all text models to the free OpenRouter model",
             "• `/model script free` — Set only script model",
             "• `/model verify gemini-2.0` — Set only verification model",
             "• `/model reset` — Reset to default configuration",
         ]
         buttons = [
-            {"text": "⚡️ Gemini 2.0", "callback_data": "mdl_gemini-2.0"},
-            {"text": "🚀 Gemini 2.5 Lite", "callback_data": "mdl_gemini-2.5"},
+            {"text": "⚡️ Gemini 3.8", "callback_data": "mdl_gemini-3.8"},
+            {"text": "🚀 Gemini 3.5 Lite", "callback_data": "mdl_gemini-3.5-lite"},
             {"text": "🆓 Free Model", "callback_data": "mdl_free"},
             {"text": "🔄 Reset Defaults", "callback_data": "mdl_reset"},
             {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
@@ -720,17 +720,17 @@ def _handle_model_command(args: List[str]) -> Dict[str, Any]:
     if sub == "reset":
         reset_config()
         return {
-            "text": "🔄 Model routing reset to defaults (Gemini 2.0 Flash + Gemini Multi-Key Failover Pool).",
+            "text": "🔄 Model routing reset to defaults (Gemini 3.8 Flash + Gemini Multi-Key Failover Pool).",
             "buttons": [{"text": "⬅️ Back to Menu", "callback_data": "menu_main"}],
             "delete_msg": False,
         }
 
     def resolve_model(target: str) -> str:
         t = target.lower().strip()
-        if t in ("gemini", "gemini-2.0", "gemini-2", "flash", "gemini-flash"):
-            return "gemini/gemini-2.0-flash"
-        elif t in ("gemini-2.5", "gemini-2.5-lite", "lite", "flash-lite"):
-            return "gemini/gemini-2.5-flash-lite"
+        if t in ("gemini", "gemini-3.8", "gemini-3.8-flash", "gemini-2.0", "gemini-2", "flash", "gemini-flash"):
+            return "gemini/gemini-3.8-flash"
+        elif t in ("gemini-3.5-lite", "gemini-3.5-flash-lite", "gemini-2.5", "gemini-2.5-lite", "lite", "flash-lite"):
+            return "gemini/gemini-3.5-flash-lite"
         elif t in ("free", "openrouter-free", "deepseek", "deepseek-chat", "deepseek-v3", "v3", "deepseek-r1", "r1", "reasoner"):
             # No free DeepSeek model exists on OpenRouter anymore
             # (deepseek/deepseek-chat:free is gone; deepseek-chat is paid),

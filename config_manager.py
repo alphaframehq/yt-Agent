@@ -31,14 +31,14 @@ from db.sheets import _read_rows, _rewrite_tab
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "active_models": {
-        "verify": "gemini/gemini-2.0-flash",
-        "script": "gemini/gemini-2.0-flash",
+        "verify": "gemini/gemini-3.8-flash",
+        "script": "gemini/gemini-3.8-flash",
         "image": "gemini/imagen-3.0-generate-001",
         "research": "tinyfish",
     },
     "verify_chain": [
-        ["gemini", "gemini-2.0-flash"],
-        ["gemini", "gemini-2.5-flash-lite"],
+        ["gemini", "gemini-3.8-flash"],
+        ["gemini", "gemini-3.5-flash-lite"],
         ["openrouter", "openrouter/free"],
     ],
     "pillar_split": {"finance": 0.7, "tech": 0.3},

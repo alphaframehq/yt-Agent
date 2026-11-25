@@ -84,7 +84,7 @@ class TestTelegramBot(unittest.TestCase):
 
         # Change verify model
         res_change = handle_command(user_id=12345, command="model", args=["verify", "gemini-2.0"])
-        self.assertIn("Model for `verify` set to `gemini/gemini-2.0-flash`", res_change["text"])
+        self.assertIn("Model for `verify` set to `gemini/gemini-3.8-flash`", res_change["text"])
 
         # Reset models
         res_reset = handle_command(user_id=12345, command="model", args=["reset"])
@@ -171,7 +171,7 @@ class TestTelegramBot(unittest.TestCase):
 
         # 2. Switch specific role via /model switch script gemini-2.5
         res_role = handle_command(user_id=12345, command="model", args=["switch", "script", "gemini-2.5"])
-        self.assertIn("Model for `script` set to `gemini/gemini-2.5-flash-lite`", res_role["text"])
+        self.assertIn("Model for `script` set to `gemini/gemini-3.5-flash-lite`", res_role["text"])
 
         # 3. Model list returns quick buttons
         res_list = handle_command(user_id=12345, command="model", args=["list"])
@@ -180,7 +180,7 @@ class TestTelegramBot(unittest.TestCase):
 
         # 4. Callback query 1-tap model switch
         cb_res = handle_callback_query("mdl_gemini-2.0")
-        self.assertTrue("gemini-2.0-flash" in cb_res["text"] or "Action" in cb_res["text"])
+        self.assertTrue("gemini-3.8-flash" in cb_res["text"] or "Action" in cb_res["text"])
 
     def test_11_agent_chat_conversation(self):
         """Verify chat with AI Agent via command and direct helper."""

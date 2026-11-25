@@ -46,14 +46,14 @@ class TestWorkflowHealer(unittest.TestCase):
             current_model="claude-3-5-haiku",
             fallback_chain=[
                 ["bedrock", "claude-3-5-haiku"],
-                ["gemini", "gemini-2.0-flash"],
+                ["gemini", "gemini-3.8-flash"],
                 ["openrouter", "deepseek-chat:free"],
             ],
         )
         decision = heal(exc, context)
         self.assertEqual(decision.action, HealingAction.SWITCH_PROVIDER)
         self.assertEqual(decision.provider, "gemini")
-        self.assertEqual(decision.model, "gemini-2.0-flash")
+        self.assertEqual(decision.model, "gemini-3.8-flash")
 
     def test_3_unauthorized_switch_key(self):
         """Test 3: 401 unauthorized -> classified INVALID_KEY -> switch_key from pool."""
