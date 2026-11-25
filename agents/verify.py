@@ -1,3 +1,10 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 (not yet applied upstream).
+# Fixes P0 #7 (audit list, 25 Nov 2026): _check_investment_advice_semantic()
+# was a stub that always returned pass with no LLM call. It now performs a
+# real LLM semantic check via tools.llm_provider.call_with_fallback() using
+# prompts/verify_investment_advice.txt, and FAILS CLOSED (returns fail, never
+# pass) when the LLM or the prompt file is unavailable. P1 verify loophole
+# (citation present => number passes unchecked) is left as a TODO, not rewritten.
 """Agent 3: Verification Agent for TubePilot AI.
 
 Audits `VideoScript` against `ResearchBundle` to catch hallucinations and compliance issues.
@@ -29,6 +36,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from config_manager import get_config
 from models.research import ResearchBundle
@@ -40,6 +48,23 @@ __all__ = ["VerificationAgent", "run_verification"]
 
 PROMPT_ADVICE_PATH = Path("prompts/verify_investment_advice.txt")
 PROMPT_QUALITY_PATH = Path("prompts/verify_narration_quality.txt")
+
+
+class _AdviceFlag(BaseModel):
+    """One flagged phrase from the LLM semantic investment-advice verdict."""
+
+    scene_id: Optional[int] = None
+    text: str = ""
+    reason: str = ""
+    severity: str = "major"
+
+
+class _AdviceVerdict(BaseModel):
+    """Structured verdict matching prompts/verify_investment_advice.txt output."""
+
+    has_investment_advice: bool = False
+    confidence: float = 0.0
+    flagged_phrases: List[_AdviceFlag] = Field(default_factory=list)
 
 FORBIDDEN_ADVICE_REGEX = re.compile(
     r"\b(buy|sell|invest in|will rise|guaranteed|sure thing|can't lose|act now|skyrocket|to the moon)\b",
@@ -167,6 +192,12 @@ class VerificationAgent:
         # Extract digits patterns like "$1.5B", "68%", "25%"
         number_pattern = re.compile(r"(\$?\d+(?:\.\d+)?\s*(?:billion|million|trillion|percent|%)?)", re.IGNORECASE)
 
+        # TODO (P1 verify loophole, audit list 25 Nov 2026): a number is only
+        # flagged when its scene has NO citation at all. A scene that cites
+        # any source passes even if the cited source does not actually back
+        # that number, and word-form numbers ("sixty-eight percent") are never
+        # checked. Fixing this needs per-claim numeric grounding against the
+        # cited source text — deliberately NOT rewritten in this P0 patch.
         for scene in script.scenes:
             # Check numbers in narration
             matches = number_pattern.findall(scene.narration)
@@ -433,8 +464,99 @@ class VerificationAgent:
     def _check_investment_advice_semantic(
         self, script: VideoScript
     ) -> Tuple[CheckResult, List[SuggestedFix]]:
-        """Audit for subtle investment advice using LLM."""
-        return CheckResult(name="INVESTMENT_ADVICE_SEMANTIC", status="pass", issues=[]), []
+        """Audit for subtle investment advice using LLM.
+
+        P0 #7 fix (2026-11-25): this was a stub that always returned pass.
+        It now calls the LLM with prompts/verify_investment_advice.txt and
+        FAILS CLOSED: if the prompt file cannot be read or the LLM call
+        fails, the check returns fail (critical), never pass — an unrunnable
+        semantic check must not clear a script as advice-free.
+        """
+        issues: List[Issue] = []
+        fixes: List[SuggestedFix] = []
+
+        try:
+            system_prompt = PROMPT_ADVICE_PATH.read_text(encoding="utf-8")
+        except OSError as e:
+            logger.error(f"Investment-advice prompt file unreadable: {e}")
+            issues.append(
+                Issue(
+                    scene_id=None,
+                    claim="INVESTMENT_ADVICE_SEMANTIC prompt",
+                    issue=f"Prompt file {PROMPT_ADVICE_PATH} could not be read ({e}); semantic check cannot run.",
+                    severity="critical",
+                    suggested_fix="Restore prompts/verify_investment_advice.txt and re-run verification.",
+                )
+            )
+            return CheckResult(name="INVESTMENT_ADVICE_SEMANTIC", status="fail", issues=issues), fixes
+
+        narration = "\n".join(
+            f"[scene {s.id} | {s.section}] {s.narration}" for s in script.scenes
+        )
+        user_prompt = (
+            "Audit the following full narration script for subtle, implicit, "
+            "or semantic investment advice.\n\n"
+            f"{narration}\n\n"
+            "Output ONLY raw JSON conforming to the requested schema "
+            "(no markdown, no commentary)."
+        )
+
+        try:
+            chain = get_config("verify_chain")
+        except Exception:
+            chain = [["gemini", "gemini-2.0-flash"]]
+
+        try:
+            verdict = call_with_fallback(
+                chain, system_prompt, user_prompt, schema=_AdviceVerdict
+            )
+        except Exception as e:
+            # Fail CLOSED: never report pass when the check did not actually run.
+            logger.error(f"LLM semantic investment-advice check failed: {e}")
+            issues.append(
+                Issue(
+                    scene_id=None,
+                    claim="INVESTMENT_ADVICE_SEMANTIC unavailable",
+                    issue=f"LLM semantic check could not run ({e}); script cannot be cleared as free of investment advice.",
+                    severity="critical",
+                    suggested_fix="Fix LLM provider configuration/credentials and re-run verification; do not publish until this check passes.",
+                )
+            )
+            return CheckResult(name="INVESTMENT_ADVICE_SEMANTIC", status="fail", issues=issues), fixes
+
+        logger.info(
+            f"Semantic investment-advice verdict: has_advice={verdict.has_investment_advice} "
+            f"(confidence={verdict.confidence:.2f}, flagged={len(verdict.flagged_phrases)})"
+        )
+        if verdict.has_investment_advice:
+            for flag in verdict.flagged_phrases:
+                severity = (
+                    flag.severity.lower()
+                    if flag.severity.lower() in ("critical", "major")
+                    else "major"
+                )
+                issues.append(
+                    Issue(
+                        scene_id=flag.scene_id,
+                        claim=f"Semantic investment advice in scene {flag.scene_id}",
+                        issue=f"{flag.reason} Flagged text: '{flag.text}'",
+                        severity=severity,
+                        suggested_fix="Remove the advisory/FOMO phrasing and rephrase with neutral analytical language.",
+                    )
+                )
+                if flag.scene_id is not None:
+                    fixes.append(
+                        SuggestedFix(
+                            scene_id=flag.scene_id,
+                            field="narration",
+                            old=flag.text,
+                            new="analyze",
+                            reason="LLM semantic check flagged investment-advice language",
+                        )
+                    )
+
+        status = "fail" if any(i.severity in ("critical", "major") for i in issues) else "pass"
+        return CheckResult(name="INVESTMENT_ADVICE_SEMANTIC", status=status, issues=issues), fixes
 
     # -------------------------------------------------------------------------
     # LLM Semantic Check 9: Narration Quality

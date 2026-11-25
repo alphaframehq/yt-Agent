@@ -1,3 +1,9 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25
+# Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — db/setup_dynamo.py
+# Fixes: P0 audit #25 (task #27): hardcoded region_name='us-east-1' removed; region is the single env var AWS_REGION (from .env.example) with no hardcoded fallback — missing AWS_REGION raises; boto3 missing / client failure / table-create failure / TTL failure / any table missing afterwards all raise instead of returning skipped/failed dicts.
+# Do NOT push to GitHub from here; apply to the repo manually after review.
+# No secrets in this file — env placeholders / env-var names only.
+
 """DynamoDB 7-Table Provisioned Setup Script for TubePilot AI.
 
 Creates all tables in PROVISIONED billing mode (5 RCU / 5 WCU per table)
@@ -12,10 +18,16 @@ Tables:
 5. yt_config (PK: config_id)
 6. yt_bot_requests (PK: request_id, TTL: ttl [7 days])
 7. yt_topics_queue (PK: topic_id)
+
+Region: single env var ``AWS_REGION`` (see .env.example) — no hardcoded
+region and no fallback. Missing AWS_REGION, missing boto3, a failed
+table create, or a table missing afterwards all raise; this script
+never returns a "skipped"/"failed" dict.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any, Dict, List
 from loguru import logger
@@ -27,19 +39,57 @@ PROVISIONED_THROUGHPUT = {
     "WriteCapacityUnits": 5,
 }
 
+_TABLE_NAMES: List[str] = [
+    "yt_videos",
+    "yt_research_cache",
+    "yt_verification_log",
+    "yt_pipeline_runs",
+    "yt_config",
+    "yt_bot_requests",
+    "yt_topics_queue",
+]
+
+
+def _aws_region() -> str:
+    """Return the single AWS region source of truth (env var AWS_REGION).
+
+    Raises:
+        RuntimeError: If AWS_REGION is not set — there is no hardcoded
+            fallback region, so a missing value must fail loudly
+            instead of provisioning tables in the wrong region.
+    """
+    region = os.environ.get("AWS_REGION")
+    if not region:
+        raise RuntimeError(
+            "AWS_REGION env var is required (single source of truth for "
+            "the DynamoDB region); set it in .env, e.g. AWS_REGION=ap-southeast-2"
+        )
+    return region
+
+
+def _verify_tables_exist(client, table_names: List[str]) -> None:
+    """Raise if any expected table is missing after provisioning."""
+    for table_name in table_names:
+        try:
+            client.describe_table(TableName=table_name)
+        except Exception as exc:
+            raise RuntimeError(
+                f"DynamoDB table '{table_name}' is missing after setup: {exc}"
+            ) from exc
+
 
 def setup_all_tables() -> Dict[str, str]:
     """Idempotently create all 7 DynamoDB tables with provisioned capacity and TTL."""
     try:
         import boto3
         from botocore.exceptions import ClientError
-    except ImportError:
-        logger.warning("boto3 not installed. Skipping live DynamoDB table creation.")
-        return {"status": "skipped", "reason": "boto3 not installed"}
+    except ImportError as exc:
+        raise RuntimeError("boto3 is required to provision DynamoDB tables") from exc
 
+    region = _aws_region()
     aws_key = get_secret("AWS_ACCESS_KEY_ID")
     aws_sec = get_secret("AWS_SECRET_ACCESS_KEY")
-    session_kwargs = {"region_name": "us-east-1"}
+    session_kwargs: Dict[str, Any] = {"region_name": region}
     if aws_key and aws_sec:
         session_kwargs["aws_access_key_id"] = aws_key
         session_kwargs["aws_secret_access_key"] = aws_sec
@@ -47,8 +97,7 @@ def setup_all_tables() -> Dict[str, str]:
     try:
         dynamo = boto3.client("dynamodb", **session_kwargs)
     except Exception as e:
-        logger.warning(f"Could not connect to AWS DynamoDB: {e}")
-        return {"status": "failed", "error": str(e)}
+        raise RuntimeError(f"Could not connect to AWS DynamoDB in {region}: {e}") from e
 
     results = {}
 
@@ -131,6 +180,10 @@ def setup_all_tables() -> Dict[str, str]:
         attribute_definitions=[{"AttributeName": "topic_id", "AttributeType": "S"}],
     )
 
+    # Verify every table actually exists — a silent "success" after a
+    # failed create would leave the runtime looking in the wrong place.
+    _verify_tables_exist(dynamo, _TABLE_NAMES)
+
     logger.info("All 7 DynamoDB table configurations verified.")
     return {"status": "success", "tables": "7 tables configured with provisioned 5 RCU/WCU"}
 
@@ -160,7 +213,7 @@ def _create_table(
     except client.exceptions.ResourceInUseException:
         logger.info(f"DynamoDB table '{table_name}' already exists.")
     except Exception as e:
-        logger.warning(f"Error creating table '{table_name}': {e}")
+        raise RuntimeError(f"Failed to create DynamoDB table '{table_name}': {e}") from e
 
     # Configure TTL if requested
     if ttl_attribute:
@@ -172,8 +225,8 @@ def _create_table(
                     "AttributeName": ttl_attribute,
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError(f"Failed to configure TTL for DynamoDB table '{table_name}': {exc}") from exc
 
 
 if __name__ == "__main__":

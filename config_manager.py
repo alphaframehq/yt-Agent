@@ -1,14 +1,25 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25
+# Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — config_manager.py
+# Fixes: P0 audit #25 (region) + P1 #10 (task #27 partial): DynamoDB unavailable raises in production; in-memory fallback only with explicit ALLOW_IN_MEMORY_CONFIG=1 (default off); set_config write failures raise instead of logging 'updated'; validate_config() checks required active_models/budget/verify_chain at snapshot_config() startup; region from single env var AWS_REGION, no hardcoded region.
+# Do NOT push to GitHub from here; apply to the repo manually after review.
+# No secrets in this file — env placeholders / env-var names only.
+
 """
 Hot-reloadable configuration manager for TubePilot AI.
 
 Storage: DynamoDB ``yt_config`` table (config_id = "main").
-Falls back to in-memory defaults when AWS / DynamoDB is unavailable.
+Production behaviour: DynamoDB unavailable -> fail loudly (RuntimeError).
+In-memory defaults are used ONLY when the explicit dev flag
+``ALLOW_IN_MEMORY_CONFIG=1`` is set (default off).
+AWS region comes from the single env var ``AWS_REGION`` (see .env.example);
+there is no hardcoded region fallback.
 Uses a 5-second TTL in-memory cache to avoid per-call round-trips.
 """
 
 from __future__ import annotations
 
 import copy
+import os
 import time
 from typing import Any
 
@@ -48,6 +59,15 @@ _TABLE_NAME: str = "yt_config"
 _CONFIG_ID: str = "main"
 _CACHE_TTL: float = 5.0  # seconds
 
+# Single source of truth for the AWS region: env var AWS_REGION only.
+# No hardcoded region anywhere in this file (boto3's own default chain
+# is used only when AWS_REGION is unset, e.g. local AWS CLI config).
+_AWS_REGION: str | None = os.environ.get("AWS_REGION") or None
+# Explicit opt-in for local dev only. Default off: in production a
+# DynamoDB failure must raise, never silently fall back to in-memory
+# defaults (a pause/budget change that never persists looks applied).
+_ALLOW_IN_MEMORY_CONFIG: bool = os.environ.get("ALLOW_IN_MEMORY_CONFIG", "").strip().lower() in ("1", "true", "yes")
+
 # ---------------------------------------------------------------------------
 # DynamoDB helpers (lazy-init, graceful fallback)
 # ---------------------------------------------------------------------------
@@ -57,18 +77,30 @@ _dynamo_available: bool | None = None  # None = not yet probed
 
 
 def _get_table() -> Any:
-    """Return the DynamoDB Table resource, or *None* if unavailable."""
+    """Return the DynamoDB Table resource.
+
+    Raises:
+        RuntimeError: If DynamoDB is unavailable and the explicit dev
+            flag ``ALLOW_IN_MEMORY_CONFIG`` is not set. In dev-flag mode
+            only, returns ``None`` and callers fall back to in-memory
+            defaults.
+    """
     global _dynamo_table, _dynamo_available
 
     if _dynamo_available is False:
-        return None
+        if _ALLOW_IN_MEMORY_CONFIG:
+            return None
+        raise RuntimeError(
+            "DynamoDB unavailable for config (see earlier log line); "
+            "set ALLOW_IN_MEMORY_CONFIG=1 only for explicit local dev"
+        )
     if _dynamo_table is not None:
         return _dynamo_table
 
     try:
         import boto3  # noqa: WPS433 — intentional lazy import
 
-        _dynamo_table = boto3.resource("dynamodb").Table(_TABLE_NAME)
+        _dynamo_table = boto3.resource("dynamodb", region_name=_AWS_REGION).Table(_TABLE_NAME)
         # Quick probe — will raise if creds/table missing
         _dynamo_table.table_status  # noqa: B018 — side-effect probe
         _dynamo_available = True
@@ -76,11 +108,14 @@ def _get_table() -> Any:
         return _dynamo_table
     except Exception as exc:  # noqa: BLE001
         _dynamo_available = False
-        logger.warning(
-            "DynamoDB unavailable ({}); falling back to in-memory defaults",
-            exc,
-        )
-        return None
+        if _ALLOW_IN_MEMORY_CONFIG:
+            logger.warning(
+                "DynamoDB unavailable ({}); ALLOW_IN_MEMORY_CONFIG=1, "
+                "using in-memory defaults (dev only)",
+                exc,
+            )
+            return None
+        raise RuntimeError(f"DynamoDB unavailable for config: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -131,28 +166,44 @@ def _load_full_config() -> dict[str, Any]:
                 logger.debug("Config loaded from DynamoDB")
                 return _cache
         except Exception as exc:  # noqa: BLE001
-            logger.warning("DynamoDB read failed ({}); using defaults", exc)
+            if not _ALLOW_IN_MEMORY_CONFIG:
+                raise RuntimeError(f"DynamoDB config read failed: {exc}") from exc
+            logger.warning("DynamoDB read failed ({}); using in-memory defaults (dev only)", exc)
 
-    # Fall back to in-memory config
+    # Reached only when no stored config row exists yet (first boot) or
+    # in dev-flag mode. In production _get_table() above already raised
+    # instead of returning None, so this is never a silent failure fallback.
+    if table is None and not _ALLOW_IN_MEMORY_CONFIG:
+        raise RuntimeError(
+            "DynamoDB config unavailable and ALLOW_IN_MEMORY_CONFIG is not set"
+        )
     _cache = copy.deepcopy(_in_memory_config)
     _cache_ts = time.monotonic()
     return _cache
 
 
 def _save_full_config(cfg: dict[str, Any]) -> None:
-    """Persist the full config dict to DynamoDB or in-memory fallback."""
+    """Persist the full config dict to DynamoDB.
+
+    Raises:
+        RuntimeError: If DynamoDB is unavailable (and the dev flag is
+            not set) or the write fails. Callers must not report the
+            change as applied when this raises.
+    """
     global _in_memory_config
-    _in_memory_config = copy.deepcopy(cfg)
-    table = _get_table()
+    table = _get_table()  # raises in production when DynamoDB is down
     if table is None:
-        logger.warning("DynamoDB unavailable — config saved in-memory only")
+        # Dev-flag mode only: _get_table() returns None instead of raising.
+        _in_memory_config = copy.deepcopy(cfg)
+        logger.warning("DynamoDB unavailable — config saved in-memory only (ALLOW_IN_MEMORY_CONFIG=1, dev only)")
         return
     try:
         item = {"config_id": _CONFIG_ID, **cfg}
         table.put_item(Item=item)
+        _in_memory_config = copy.deepcopy(cfg)
         logger.info("Config saved to DynamoDB")
     except Exception as exc:  # noqa: BLE001
-        logger.error("DynamoDB write failed: {}", exc)
+        raise RuntimeError(f"DynamoDB config write failed: {exc}") from exc
 
 
 
@@ -200,6 +251,7 @@ __all__ = [
     "set_config",
     "snapshot_config",
     "reset_config",
+    "validate_config",
 ]
 
 
@@ -209,8 +261,9 @@ _UNSET = object()
 def get_config(key_path: str, default: Any = _UNSET) -> Any:
     """Return the config value at *key_path* (dot-notation).
 
-    Uses a 5-second in-memory cache.  Falls back to ``DEFAULT_CONFIG``
-    when DynamoDB is unavailable or the key is missing remotely.
+    Uses a 5-second in-memory cache. Falls back to ``DEFAULT_CONFIG``
+    for a key missing remotely; in production a DynamoDB failure raises
+    instead of silently serving defaults (dev-flag mode excepted).
 
     Args:
         key_path: Dot-separated path, e.g. ``"active_models.verify"``.
@@ -241,6 +294,10 @@ def set_config(key_path: str, value: Any) -> None:
     Args:
         key_path: Dot-separated path, e.g. ``"budget_ai_per_video"``.
         value:    New value to store.
+
+    Raises:
+        RuntimeError: If persisting to DynamoDB fails — the "updated"
+            log line below is only reached after a successful write.
     """
     cfg = _load_full_config()
     cfg = copy.deepcopy(cfg)
@@ -260,6 +317,7 @@ def snapshot_config() -> dict[str, Any]:
         A deep copy of the current configuration dict.
     """
     cfg = _load_full_config()
+    validate_config(cfg)
     frozen = copy.deepcopy(cfg)
     logger.debug("Config snapshot created")
     return frozen
@@ -273,6 +331,46 @@ def reset_config() -> None:
     _save_full_config(defaults)
     _invalidate_cache()
     logger.info("Config reset to defaults")
+
+
+# ---------------------------------------------------------------------------
+# Startup validation
+# ---------------------------------------------------------------------------
+
+_REQUIRED_MODEL_KEYS: tuple[str, ...] = ("verify", "script", "image")
+
+
+def validate_config(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Validate required keys/models in *cfg* (or the loaded config).
+
+    Called from ``snapshot_config()`` so a misconfigured run fails at
+    pipeline startup instead of mid-pipeline. Required keys are taken
+    from the original ``DEFAULT_CONFIG`` shape: ``active_models`` must
+    name a model for verify/script/image, ``verify_chain`` must be
+    non-empty, and ``budget_ai_per_video`` must be a number.
+
+    Raises:
+        ValueError: Listing every missing/empty required key.
+    """
+    cfg = cfg if cfg is not None else _load_full_config()
+    missing: list[str] = []
+    models = cfg.get("active_models")
+    if not isinstance(models, dict):
+        missing.append("active_models")
+    else:
+        for key in _REQUIRED_MODEL_KEYS:
+            if not models.get(key):
+                missing.append(f"active_models.{key}")
+    budget = cfg.get("budget_ai_per_video")
+    if budget is None:
+        missing.append("budget_ai_per_video")
+    elif not isinstance(budget, (int, float)):
+        missing.append("budget_ai_per_video (must be a number)")
+    if not cfg.get("verify_chain"):
+        missing.append("verify_chain")
+    if missing:
+        raise ValueError(f"Invalid/incomplete config; missing: {', '.join(missing)}")
+    return cfg
 
 
 # ---------------------------------------------------------------------------
