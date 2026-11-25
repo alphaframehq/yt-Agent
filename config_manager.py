@@ -1,29 +1,29 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25
-# Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — config_manager.py
-# Fixes: P0 audit #25 (region) + P1 #10 (task #27 partial): DynamoDB unavailable raises in production; in-memory fallback only with explicit ALLOW_IN_MEMORY_CONFIG=1 (default off); set_config write failures raise instead of logging 'updated'; validate_config() checks required active_models/budget/verify_chain at snapshot_config() startup; region from single env var AWS_REGION, no hardcoded region.
-# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
+# 25 Nov 2026 (DynamoDB -> Google Sheets migration): config is now
+# stored in the ``yt_config`` tab of the Google Spreadsheet
+# (one row per top-level key, JSON-encoded values) instead of the
+# DynamoDB ``yt_config`` table. Secrets are NOT stored here — they
+# live in GitHub repo secrets / env vars (see tools/secrets.py).
 # No secrets in this file — env placeholders / env-var names only.
 
 """
 Hot-reloadable configuration manager for TubePilot AI.
 
-Storage: DynamoDB ``yt_config`` table (config_id = "main").
-Production behaviour: DynamoDB unavailable -> fail loudly (RuntimeError).
-In-memory defaults are used ONLY when the explicit dev flag
-``ALLOW_IN_MEMORY_CONFIG=1`` is set (default off).
-AWS region comes from the single env var ``AWS_REGION`` (see .env.example);
-there is no hardcoded region fallback.
+Storage: Google Sheets ``yt_config`` tab (via ``db.sheets``).
+Production behaviour: a Sheets failure raises loudly (RuntimeError).
+There is no in-memory fallback in production — a config change that
+never persists must never look applied.
 Uses a 5-second TTL in-memory cache to avoid per-call round-trips.
 """
 
 from __future__ import annotations
 
 import copy
-import os
 import time
 from typing import Any
 
 from loguru import logger
+
+from db.sheets import _read_rows, _rewrite_tab
 
 # ---------------------------------------------------------------------------
 # Default configuration — single source of truth
@@ -55,67 +55,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
-_TABLE_NAME: str = "yt_config"
-_CONFIG_ID: str = "main"
+_CONFIG_TAB: str = "yt_config"
 _CACHE_TTL: float = 5.0  # seconds
-
-# Single source of truth for the AWS region: env var AWS_REGION only.
-# No hardcoded region anywhere in this file (boto3's own default chain
-# is used only when AWS_REGION is unset, e.g. local AWS CLI config).
-_AWS_REGION: str | None = os.environ.get("AWS_REGION") or None
-# Explicit opt-in for local dev only. Default off: in production a
-# DynamoDB failure must raise, never silently fall back to in-memory
-# defaults (a pause/budget change that never persists looks applied).
-_ALLOW_IN_MEMORY_CONFIG: bool = os.environ.get("ALLOW_IN_MEMORY_CONFIG", "").strip().lower() in ("1", "true", "yes")
-
-# ---------------------------------------------------------------------------
-# DynamoDB helpers (lazy-init, graceful fallback)
-# ---------------------------------------------------------------------------
-
-_dynamo_table: Any = None
-_dynamo_available: bool | None = None  # None = not yet probed
-
-
-def _get_table() -> Any:
-    """Return the DynamoDB Table resource.
-
-    Raises:
-        RuntimeError: If DynamoDB is unavailable and the explicit dev
-            flag ``ALLOW_IN_MEMORY_CONFIG`` is not set. In dev-flag mode
-            only, returns ``None`` and callers fall back to in-memory
-            defaults.
-    """
-    global _dynamo_table, _dynamo_available
-
-    if _dynamo_available is False:
-        if _ALLOW_IN_MEMORY_CONFIG:
-            return None
-        raise RuntimeError(
-            "DynamoDB unavailable for config (see earlier log line); "
-            "set ALLOW_IN_MEMORY_CONFIG=1 only for explicit local dev"
-        )
-    if _dynamo_table is not None:
-        return _dynamo_table
-
-    try:
-        import boto3  # noqa: WPS433 — intentional lazy import
-
-        _dynamo_table = boto3.resource("dynamodb", region_name=_AWS_REGION).Table(_TABLE_NAME)
-        # Quick probe — will raise if creds/table missing
-        _dynamo_table.table_status  # noqa: B018 — side-effect probe
-        _dynamo_available = True
-        logger.info("DynamoDB table '{}' connected", _TABLE_NAME)
-        return _dynamo_table
-    except Exception as exc:  # noqa: BLE001
-        _dynamo_available = False
-        if _ALLOW_IN_MEMORY_CONFIG:
-            logger.warning(
-                "DynamoDB unavailable ({}); ALLOW_IN_MEMORY_CONFIG=1, "
-                "using in-memory defaults (dev only)",
-                exc,
-            )
-            return None
-        raise RuntimeError(f"DynamoDB unavailable for config: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +73,7 @@ def _cache_valid() -> bool:
 
 
 def _invalidate_cache() -> None:
-    """Force the next read to hit DynamoDB."""
+    """Force the next read to hit Google Sheets."""
     global _cache, _cache_ts
     _cache = {}
     _cache_ts = 0.0
@@ -143,68 +84,50 @@ def _invalidate_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
-_in_memory_config: dict[str, Any] = copy.deepcopy(DEFAULT_CONFIG)
-
-
 def _load_full_config() -> dict[str, Any]:
-    """Fetch the full config dict from DynamoDB or return cached / in-memory fallback."""
+    """Fetch the full config dict from the Sheets ``yt_config`` tab.
+
+    Returns the stored config merged over ``DEFAULT_CONFIG`` (stored
+    keys win; missing keys fall back to defaults). An empty tab means
+    first boot — defaults are returned (not yet persisted).
+
+    Raises:
+        RuntimeError: If Google Sheets cannot be reached — never a
+            silent fallback to defaults in production.
+    """
     global _cache, _cache_ts
 
     if _cache_valid():
         return _cache
 
-    table = _get_table()
-    if table is not None:
-        try:
-            resp = table.get_item(Key={"config_id": _CONFIG_ID})
-            item = resp.get("Item")
-            if item is not None:
-                # Strip the partition key — keep only config payload
-                cfg = {k: v for k, v in item.items() if k != "config_id"}
-                _cache = cfg
-                _cache_ts = time.monotonic()
-                logger.debug("Config loaded from DynamoDB")
-                return _cache
-        except Exception as exc:  # noqa: BLE001
-            if not _ALLOW_IN_MEMORY_CONFIG:
-                raise RuntimeError(f"DynamoDB config read failed: {exc}") from exc
-            logger.warning("DynamoDB read failed ({}); using in-memory defaults (dev only)", exc)
-
-    # Reached only when no stored config row exists yet (first boot) or
-    # in dev-flag mode. In production _get_table() above already raised
-    # instead of returning None, so this is never a silent failure fallback.
-    if table is None and not _ALLOW_IN_MEMORY_CONFIG:
-        raise RuntimeError(
-            "DynamoDB config unavailable and ALLOW_IN_MEMORY_CONFIG is not set"
-        )
-    _cache = copy.deepcopy(_in_memory_config)
+    # Raises RuntimeError on any Sheets failure (fail loudly).
+    rows = _read_rows(_CONFIG_TAB)
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    for row in rows:
+        key = row.get("key")
+        value = row.get("value_json")
+        # An empty value cell reads back as None — treat it as "no
+        # value stored" so it cannot wipe out a default.
+        if key is not None and value is not None:
+            cfg[key] = value
+    _cache = cfg
     _cache_ts = time.monotonic()
+    logger.debug("Config loaded from Google Sheets")
     return _cache
 
 
 def _save_full_config(cfg: dict[str, Any]) -> None:
-    """Persist the full config dict to DynamoDB.
+    """Persist the full config dict to the Sheets ``yt_config`` tab.
 
     Raises:
-        RuntimeError: If DynamoDB is unavailable (and the dev flag is
-            not set) or the write fails. Callers must not report the
-            change as applied when this raises.
+        RuntimeError: If persisting to Google Sheets fails. Callers
+            must not report the change as applied when this raises.
     """
-    global _in_memory_config
-    table = _get_table()  # raises in production when DynamoDB is down
-    if table is None:
-        # Dev-flag mode only: _get_table() returns None instead of raising.
-        _in_memory_config = copy.deepcopy(cfg)
-        logger.warning("DynamoDB unavailable — config saved in-memory only (ALLOW_IN_MEMORY_CONFIG=1, dev only)")
-        return
-    try:
-        item = {"config_id": _CONFIG_ID, **cfg}
-        table.put_item(Item=item)
-        _in_memory_config = copy.deepcopy(cfg)
-        logger.info("Config saved to DynamoDB")
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"DynamoDB config write failed: {exc}") from exc
-
+    rows = [{"key": k, "value_json": v} for k, v in cfg.items()]
+    # Raises RuntimeError on any Sheets failure.
+    _rewrite_tab(_CONFIG_TAB, rows)
+    _invalidate_cache()
+    logger.info("Config saved to Google Sheets")
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +185,8 @@ def get_config(key_path: str, default: Any = _UNSET) -> Any:
     """Return the config value at *key_path* (dot-notation).
 
     Uses a 5-second in-memory cache. Falls back to ``DEFAULT_CONFIG``
-    for a key missing remotely; in production a DynamoDB failure raises
-    instead of silently serving defaults (dev-flag mode excepted).
+    for a key missing remotely; a Google Sheets failure raises
+    instead of silently serving defaults.
 
     Args:
         key_path: Dot-separated path, e.g. ``"active_models.verify"``.
@@ -287,16 +210,15 @@ def get_config(key_path: str, default: Any = _UNSET) -> Any:
             raise
 
 
-
 def set_config(key_path: str, value: Any) -> None:
-    """Update a single config value and persist to DynamoDB.
+    """Update a single config value and persist to Google Sheets.
 
     Args:
         key_path: Dot-separated path, e.g. ``"budget_ai_per_video"``.
         value:    New value to store.
 
     Raises:
-        RuntimeError: If persisting to DynamoDB fails — the "updated"
+        RuntimeError: If persisting to Google Sheets fails — the "updated"
             log line below is only reached after a successful write.
     """
     cfg = _load_full_config()
@@ -325,9 +247,7 @@ def snapshot_config() -> dict[str, Any]:
 
 def reset_config() -> None:
     """Reset the configuration to ``DEFAULT_CONFIG`` and persist."""
-    global _in_memory_config
     defaults = copy.deepcopy(DEFAULT_CONFIG)
-    _in_memory_config = copy.deepcopy(defaults)
     _save_full_config(defaults)
     _invalidate_cache()
     logger.info("Config reset to defaults")
@@ -395,7 +315,7 @@ def get_channel_branding() -> dict[str, Any]:
 
 
 def set_channel_name(name: str) -> None:
-    """Update channel name in DynamoDB and in-memory cache."""
+    """Update channel name in Google Sheets and in-memory cache."""
     name_clean = name.strip()
     if not name_clean:
         raise ValueError("Channel name cannot be empty.")
@@ -404,10 +324,9 @@ def set_channel_name(name: str) -> None:
 
 
 def set_cta(cta_text: str, cta_type: str = "like_subscribe") -> None:
-    """Update CTA text in DynamoDB and in-memory cache."""
+    """Update CTA text in Google Sheets and in-memory cache."""
     cta_clean = cta_text.strip()
     if not cta_clean:
         raise ValueError("CTA text cannot be empty.")
     set_config(f"cta.{cta_type}", cta_clean)
     logger.info("CTA '{}' updated to: '{}'", cta_type, cta_clean[:60])
-
