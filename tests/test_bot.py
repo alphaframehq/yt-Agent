@@ -11,6 +11,13 @@ import sys
 import unittest
 from pathlib import Path
 
+# Module-level: config_manager.py / tools/secrets.py read
+# ALLOW_IN_MEMORY_* once at import time. unittest discover imports
+# test_bot.py first (alphabetical), so setting the flags here — before
+# telegram_bot.bot is imported below — covers every test module.
+os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
+os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
+
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

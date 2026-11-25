@@ -263,3 +263,17 @@ All 27 P0 items have a patch. "Covered" means the silent mock / fake success is 
   sets `ALLOW_IN_MEMORY_CONFIG=1` and `ALLOW_IN_MEMORY_SECRETS=1` (CI has no
   DynamoDB; these flags are test-only and do not enable any mock/demo
   fallback in production code).
+
+- **CI env flags — blocked by GitHub API permissions (25 Nov 2026)** —
+  `.github/workflows/ci.yml` could NOT be pushed via the GitHub connector:
+  `push_files` returns `403 Resource not accessible by integration` on any
+  tree containing a workflow file (the integration lacks workflow-write
+  scope). The corrected `ci.yml` (with `ALLOW_IN_MEMORY_CONFIG=1` /
+  `ALLOW_IN_MEMORY_SECRETS=1` in the test job) is kept in this folder at
+  `fixes/.github/workflows/ci.yml` — it must be applied by someone with a
+  token that has workflow scope, or via the GitHub web UI. Workaround in
+  place: `tests/test_bot.py` sets both flags at module level before any
+  production module is imported (discover imports test_bot.py first), and
+  every rewritten test file also sets them before its own imports, so CI
+  passes without the workflow change. `config_manager.py` /
+  `tools/secrets.py` read these flags once at import time.
