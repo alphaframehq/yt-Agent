@@ -29,16 +29,13 @@ jobs:
     timeout-minutes: 60
 
     env:
-      MASTER_SECRET: ${{ secrets.MASTER_SECRET }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
       GH_PAT: ${{ secrets.GH_PAT }}
       GH_REPO_OWNER: "alphaframehq"
       GH_REPO_NAME: "yt-Agent"
-      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'ap-southeast-2' }}
-      AWS_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'ap-southeast-2' }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
+      AWS_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
       GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
       OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
       TINYFISH_API_KEY: ${{ secrets.TINYFISH_API_KEY }}
@@ -48,6 +45,8 @@ jobs:
       YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
     steps:
       - name: Checkout Code
@@ -69,9 +68,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify DynamoDB Tables & Config
+      - name: Verify Google Sheets Tabs & Config
         run: |
-          python -c "from db.setup_dynamo import setup_all_tables; setup_all_tables()"
+          python -c "from db.setup_sheets import setup_all_sheets; setup_all_sheets()"
           python -c "from storage.ephemeral import startup_orphan_sweep; startup_orphan_sweep()"
 
       - name: Run Pipeline (With Retry for Network Resilience)
@@ -90,7 +89,7 @@ jobs:
       - name: Notify Success on Telegram
         if: success()
         run: |
-          python scripts/notify.py "✅ *TubePilot AI Daily Run Completed Successfully!* Videos uploaded private to YouTube and registered in DynamoDB."
+          python scripts/notify.py "✅ *TubePilot AI Daily Run Completed Successfully!* Videos uploaded private to YouTube and registered in Google Sheets."
 
       - name: Notify Failure on Telegram
         if: failure()
