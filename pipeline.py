@@ -1,3 +1,9 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25
+# Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — pipeline.py
+# Fixes: P0 audit #18 (task #20): PipelineResult/run_pipeline default to verification_overall='not_run' and verification_confidence=0.0 when no VerificationReport exists, instead of 'pass'/1.0.
+# Do NOT push to GitHub from here; apply to the repo manually after review.
+# No secrets in this file — env placeholders / env-var names only.
+
 """Main Pipeline execution wrapper for TubePilot AI.
 
 Wraps all agent calls with:
@@ -34,8 +40,9 @@ class PipelineResult(BaseModel):
     status: str
     stage: str
     yt_video_id: Optional[str] = None
-    verification_overall: str = "pass"
-    verification_confidence: float = 1.0
+    # P0: never claim "pass" / 1.0 when no verification has run.
+    verification_overall: str = "not_run"
+    verification_confidence: float = 0.0
     iteration: int = 1
     duration_sec: float = 0.0
     error: Optional[str] = None
@@ -100,8 +107,12 @@ def run_pipeline(topic: str, pillar: str = "finance_to_technical") -> PipelineRe
     state = graph.run(topic=topic, pillar=pillar)
 
     elapsed = round(time.perf_counter() - t_start, 2)
-    ver_overall = state.verification.overall if state.verification else "pass"
-    ver_conf = state.verification.confidence if state.verification else 1.0
+    # P0: no VerificationReport means verification did not run — never
+    # report "pass" / 1.0 for a check that never happened.
+    ver_overall = state.verification.overall if state.verification else "not_run"
+    ver_conf = state.verification.confidence if state.verification else 0.0
+    if ver_conf is None:
+        ver_conf = 0.0
 
     result = PipelineResult(
         topic=state.topic,
