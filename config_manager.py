@@ -39,7 +39,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "verify_chain": [
         ["gemini", "gemini-2.0-flash"],
         ["gemini", "gemini-2.5-flash-lite"],
-        ["openrouter", "deepseek/deepseek-chat:free"],
+        ["openrouter", "openrouter/free"],
     ],
     "pillar_split": {"finance": 0.7, "tech": 0.3},
     "budget_ai_per_video": 0.30,

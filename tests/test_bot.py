@@ -165,9 +165,9 @@ class TestTelegramBot(unittest.TestCase):
     def test_10_advanced_model_switching(self):
         """Verify global and role-specific model switching commands and callbacks."""
         # 1. Global switch via single arg e.g. /model deepseek
-        res_global = handle_command(user_id=12345, command="model", args=["deepseek"])
+        res_global = handle_command(user_id=12345, command="model", args=["free"])
         self.assertIn("All Text Models Switched Globally", res_global["text"])
-        self.assertIn("openrouter/deepseek/deepseek-chat", res_global["text"])
+        self.assertIn("openrouter/free", res_global["text"])
 
         # 2. Switch specific role via /model switch script gemini-2.5
         res_role = handle_command(user_id=12345, command="model", args=["switch", "script", "gemini-2.5"])
