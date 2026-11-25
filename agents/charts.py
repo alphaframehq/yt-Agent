@@ -1,3 +1,12 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 (not yet applied upstream).
+# Fixes P0 #10 (audit list, 25 Nov 2026): every chart type plotted hardcoded
+# data (5 of 8 ignored the `data` argument) and any chart error silently
+# returned a content-free stub PNG as success. This patch makes `data` from
+# the ResearchBundle mandatory for every chart type (ValueError if missing),
+# removes all hardcoded waterfall/TAM/competitor/scatter/donut defaults, and
+# re-raises the original error on chart failure instead of returning a stub.
+# NOTE: callers that previously called generate_chart_by_type() without data
+# (e.g. agents/visuals.py) must now pass bundle data, or the call will raise.
 """Institutional Chart Generation Module for TubePilot AI.
 
 Generates 8 branded fintech financial charts matching official channel styling:
@@ -7,6 +16,11 @@ Generates 8 branded fintech financial charts matching official channel styling:
 - Secondary Accent: #FF6B6B (Coral/Red)
 - High resolution: 12x6 inches, 150 DPI
 - Clean minimalist layout: Spines removed, alpha grid, labeled data points
+
+All chart data MUST come from the ResearchBundle via `generate_chart_by_type`
+(or the per-type functions directly). There are no hardcoded data defaults:
+a missing value raises ValueError, and a rendering failure re-raises the
+original exception — a chart is never silently replaced by a stub image.
 
 Chart Types:
 1. revenue_trend(years, values, company)
@@ -48,6 +62,28 @@ FG_COLOR = "#E6EDF3"
 ACCENT_CYAN = "#00D4AA"
 ACCENT_CORAL = "#FF6B6B"
 GRID_COLOR = "#2A324B"
+
+
+def _format_usd(value: float) -> str:
+    """Compact USD label for chart titles (data-driven, never hardcoded)."""
+    if value >= 1e12:
+        return f"${value / 1e12:.2f}T"
+    if value >= 1e9:
+        return f"${value / 1e9:.1f}B"
+    if value >= 1e6:
+        return f"${value / 1e6:.1f}M"
+    return f"${value:,.0f}"
+
+
+def _require(data: Dict[str, Any], key: str, chart_type: str) -> Any:
+    """Fetch a required data key, or fail loudly — charts never invent data."""
+    if key not in data or data[key] is None:
+        raise ValueError(
+            f"generate_chart_by_type('{chart_type}'): missing required data "
+            f"key '{key}' — charts must be built from the ResearchBundle, "
+            "no hardcoded defaults."
+        )
+    return data[key]
 
 
 def _setup_figure():
@@ -108,8 +144,9 @@ def revenue_trend(years: List[str], values: List[float], company: str) -> str:
         ax.set_title(f"{company.upper()} // ANNUAL REVENUE TRAJECTORY {unit}", color=FG_COLOR, fontsize=14, pad=15)
         return _save_chart(fig, f"rev_trend_{company.lower().replace(' ', '_')}.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate revenue_trend chart: {e}")
-        return _generate_chart_stub("revenue_trend")
+        raise
 
 
 def segment_breakdown(segments_dict: Dict[str, float], company: str) -> str:
@@ -138,8 +175,9 @@ def segment_breakdown(segments_dict: Dict[str, float], company: str) -> str:
         ax.set_title(f"{company.upper()} // REVENUE SEGMENT CONTRIBUTION (%)", color=FG_COLOR, fontsize=14, pad=15)
         return _save_chart(fig, f"segments_{company.lower().replace(' ', '_')}.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate segment_breakdown chart: {e}")
-        return _generate_chart_stub("segment_breakdown")
+        raise
 
 
 def margin_compare(companies_dict: Dict[str, Dict[str, float]]) -> str:
@@ -153,9 +191,18 @@ def margin_compare(companies_dict: Dict[str, Dict[str, float]]) -> str:
         x = np.arange(len(companies))
         width = 0.25
 
-        gross = [companies_dict[c].get("gross", 0.6) * 100 for c in companies]
-        operating = [companies_dict[c].get("operating", 0.2) * 100 for c in companies]
-        net = [companies_dict[c].get("net", 0.15) * 100 for c in companies]
+        # P0 #10: margins must come from the ResearchBundle — no 0.6/0.2/0.15 defaults.
+        for c in companies:
+            for key in ("gross", "operating", "net"):
+                if key not in companies_dict[c]:
+                    raise ValueError(
+                        f"margin_compare: company '{c}' is missing required "
+                        f"margin '{key}' from the ResearchBundle."
+                    )
+
+        gross = [companies_dict[c]["gross"] * 100 for c in companies]
+        operating = [companies_dict[c]["operating"] * 100 for c in companies]
+        net = [companies_dict[c]["net"] * 100 for c in companies]
 
         ax.bar(x - width, gross, width, label="Gross Margin", color=ACCENT_CYAN)
         ax.bar(x, operating, width, label="Operating Margin", color="#0070F3")
@@ -168,8 +215,9 @@ def margin_compare(companies_dict: Dict[str, Dict[str, float]]) -> str:
 
         return _save_chart(fig, "margin_compare.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate margin_compare chart: {e}")
-        return _generate_chart_stub("margin_compare")
+        raise
 
 
 def unit_economics_waterfall(revenue: float, cogs: float, gross: float, opex: float, net: float) -> str:
@@ -190,8 +238,9 @@ def unit_economics_waterfall(revenue: float, cogs: float, gross: float, opex: fl
         ax.set_title("TRANSACTION UNIT ECONOMICS WATERFALL (% OF GMV)", color=FG_COLOR, fontsize=14, pad=15)
         return _save_chart(fig, "unit_economics_waterfall.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate unit_economics_waterfall chart: {e}")
-        return _generate_chart_stub("unit_economics_waterfall")
+        raise
 
 
 def scope_tam(current: float, tam: float, penetration_pct: float) -> str:
@@ -218,11 +267,12 @@ def scope_tam(current: float, tam: float, penetration_pct: float) -> str:
             at.set_color(BG_COLOR)
             at.set_fontweight("bold")
 
-        ax.set_title(f"MANDATORY SCOPE: TAM ($2.5T) VS CURRENT CAPTURE ({penetration_pct}%)", color=FG_COLOR, fontsize=14)
+        ax.set_title(f"MANDATORY SCOPE: TAM ({_format_usd(tam)}) VS CURRENT CAPTURE ({penetration_pct}%)", color=FG_COLOR, fontsize=14)
         return _save_chart(fig, "scope_tam.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate scope_tam chart: {e}")
-        return _generate_chart_stub("scope_tam")
+        raise
 
 
 def competitor_matrix(companies: List[str], metrics: List[float]) -> str:
@@ -242,8 +292,9 @@ def competitor_matrix(companies: List[str], metrics: List[float]) -> str:
         ax.set_title("COMPETITIVE TAKE RATE BENCHMARK (%)", color=FG_COLOR, fontsize=14, pad=15)
         return _save_chart(fig, "competitor_matrix.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate competitor_matrix chart: {e}")
-        return _generate_chart_stub("competitor_matrix")
+        raise
 
 
 def growth_margin_scatter(companies: List[Dict[str, Any]]) -> str:
@@ -253,9 +304,17 @@ def growth_margin_scatter(companies: List[Dict[str, Any]]) -> str:
 
         fig, ax = _setup_figure()
         for comp in companies:
-            x = comp.get("growth", 0.25) * 100
-            y = comp.get("margin", 0.20) * 100
-            name = comp.get("name", "Fintech")
+            # P0 #10: growth/margin/name must come from the ResearchBundle —
+            # no 0.25/0.20/"Fintech" defaults.
+            for key in ("growth", "margin", "name"):
+                if key not in comp:
+                    raise ValueError(
+                        f"growth_margin_scatter: every company needs '{key}' "
+                        "from the ResearchBundle."
+                    )
+            x = comp["growth"] * 100
+            y = comp["margin"] * 100
+            name = comp["name"]
 
             ax.scatter(x, y, color=ACCENT_CYAN, s=180, edgecolors=FG_COLOR, linewidth=1.5)
             ax.annotate(name, (x + 0.8, y + 0.5), color=FG_COLOR, fontweight="bold")
@@ -265,8 +324,9 @@ def growth_margin_scatter(companies: List[Dict[str, Any]]) -> str:
         ax.set_title("EFFICIENCY FRONTIER: GROWTH VS OPERATING MARGIN", color=FG_COLOR, fontsize=14, pad=15)
         return _save_chart(fig, "growth_margin_scatter.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate growth_margin_scatter chart: {e}")
-        return _generate_chart_stub("growth_margin_scatter")
+        raise
 
 
 def market_share_donut(shares_dict: Dict[str, float]) -> str:
@@ -297,66 +357,74 @@ def market_share_donut(shares_dict: Dict[str, float]) -> str:
         ax.set_title("GLOBAL MARKET SHARE DISTRIBUTION", color=FG_COLOR, fontsize=14, pad=15)
         return _save_chart(fig, "market_share_donut.png")
     except Exception as e:
+        # P0 #10: never return a content-free stub PNG as success.
         logger.error(f"Failed to generate market_share_donut chart: {e}")
-        return _generate_chart_stub("market_share_donut")
+        raise
 
 
 def generate_chart_by_type(chart_type: str, data: Optional[Dict[str, Any]] = None) -> str:
-    """Dynamic router generating any of the 8 chart types with fallback."""
-    data = data or {}
-    company = data.get("company", "Fintech Leader")
+    """Dynamic router generating any of the 8 chart types from bundle data.
+
+    P0 #10: `data` is mandatory and must carry every value the chart plots.
+    Any missing key raises ValueError — no hardcoded defaults are used.
+    """
+    if data is None:
+        raise ValueError(
+            f"generate_chart_by_type('{chart_type}'): 'data' is required — "
+            "charts must be built from the ResearchBundle, no hardcoded defaults."
+        )
 
     if chart_type == "revenue_trend":
-        years = data.get("years", ["2021", "2022", "2023", "2024"])
-        values = data.get("values", [4.5e9, 7.8e9, 11.2e9, 14.5e9])
+        company = _require(data, "company", chart_type)
+        years = _require(data, "years", chart_type)
+        values = _require(data, "values", chart_type)
         return revenue_trend(years, values, company)
 
     elif chart_type == "segment_breakdown":
-        segments = data.get("segments", {"Payment Processing": 0.65, "Treasury SaaS": 0.20, "Radar Fraud": 0.15})
+        company = _require(data, "company", chart_type)
+        segments = _require(data, "segments", chart_type)
         return segment_breakdown(segments, company)
 
     elif chart_type == "margin_compare":
-        comps = data.get("companies", {company: {"gross": 0.68, "operating": 0.24, "net": 0.19}, "Competitor A": {"gross": 0.52, "operating": 0.14, "net": 0.10}})
+        comps = _require(data, "companies", chart_type)
         return margin_compare(comps)
 
     elif chart_type == "unit_economics_waterfall":
-        return unit_economics_waterfall(2.9, 1.8, 1.1, 0.45, 0.65)
+        return unit_economics_waterfall(
+            _require(data, "revenue", chart_type),
+            _require(data, "cogs", chart_type),
+            _require(data, "gross", chart_type),
+            _require(data, "opex", chart_type),
+            _require(data, "net", chart_type),
+        )
 
     elif chart_type == "scope_tam":
-        return scope_tam(14.5e9, 2.5e12, 4.8)
+        return scope_tam(
+            _require(data, "current", chart_type),
+            _require(data, "tam", chart_type),
+            _require(data, "penetration_pct", chart_type),
+        )
 
     elif chart_type == "competitor_matrix":
-        comps = ["Stripe", "Adyen", "PayPal", "Square"]
-        metrics = [0.029, 0.019, 0.023, 0.026]
+        comps = _require(data, "companies", chart_type)
+        metrics = _require(data, "metrics", chart_type)
         return competitor_matrix(comps, metrics)
 
     elif chart_type == "growth_margin_scatter":
-        comps = [
-            {"name": "Stripe", "growth": 0.29, "margin": 0.24},
-            {"name": "Adyen", "growth": 0.23, "margin": 0.46},
-            {"name": "PayPal", "growth": 0.09, "margin": 0.17},
-        ]
+        comps = _require(data, "companies", chart_type)
         return growth_margin_scatter(comps)
 
     elif chart_type == "market_share_donut":
-        shares = {"Stripe": 38, "Adyen": 26, "PayPal": 21, "Others": 15}
+        shares = _require(data, "shares", chart_type)
         return market_share_donut(shares)
 
     else:
-        return _generate_chart_stub(chart_type)
-
-
-def _generate_chart_stub(chart_type: str) -> str:
-    """Generate high-contrast fallback chart graphic using Pillow."""
-    from PIL import Image, ImageDraw
-
-    dest = CHART_DIR / f"stub_{chart_type}.png"
-    img = Image.new("RGB", (1200, 600), color=(14, 17, 23))
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([40, 40, 1160, 560], outline=(0, 212, 170), width=2)
-    draw.text((80, 80), f"TUBEPILOT AI // {chart_type.upper()}", fill=(0, 212, 170))
-    img.save(dest, "PNG")
-    return str(dest.resolve())
+        raise ValueError(
+            f"generate_chart_by_type: unknown chart type '{chart_type}'. "
+            "Valid types: revenue_trend, segment_breakdown, margin_compare, "
+            "unit_economics_waterfall, scope_tam, competitor_matrix, "
+            "growth_margin_scatter, market_share_donut."
+        )
 
 
 def chart_to_clip(png_path: str, duration: float) -> Any:
