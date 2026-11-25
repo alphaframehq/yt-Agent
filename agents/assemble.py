@@ -1,3 +1,18 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 — NOT pushed to GitHub.
+# Source: alphaframehq/yt-Agent @ main c39f42541b8e784dcf41c09583dc57227be07667
+# Fixes audit P0 #11 (listed as #12 in the task slice): _render_composition()
+# now RAISES the MoviePy/FFmpeg rendering error instead of writing a
+# ~40-byte empty MP4 as success. The placeholder-MP4 success path is
+# removed from production: _generate_placeholder_mp4() raises unless an
+# explicit ALLOW_DEMO_MODE env flag is set (default off), and even then
+# writes a distinctly named *.DEMO-PLACEHOLDER.mp4 file, never the real
+# destination name.
+# NOTE (P1, unimplemented claims — not invented here): the module docstring
+# promises burned-in subtitles, Ken Burns zoom and chart fade-in, but the
+# original code implements none of them: the SRT file is generated but
+# never burned into the video (no subtitles filter is applied in
+# write_videofile), ImageClip is used with no Ken Burns zoom, and chart
+# PNGs get no fade-in. Do not claim those features until implemented.
 """Video Assembly Engine for TubePilot AI.
 
 Combines:
@@ -7,11 +22,17 @@ Combines:
 - Ambient background music at volume 0.08
 - Burned-in subtitles (SRT via faster-whisper / FFmpeg subtitles filter)
 - Supports both 16:9 Longform (1920x1080) and 9:16 Shorts (1080x1920)
+
+P1 CAVEAT (2026-11-25 patch note): burned-in subtitles, Ken Burns zoom
+and chart fade-in are claimed above but NOT implemented in this file —
+the SRT is generated but never burned in, ImageClip has no zoom applied,
+and charts have no fade-in. See _render_composition().
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from loguru import logger
@@ -30,6 +51,24 @@ __all__ = [
 OUTPUT_DIR = Path("cache/renders")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# A successfully rendered video must be at least this large. The old
+# placeholder was a ~40-byte ftyp atom; anything near that size is not
+# a real render.
+MIN_RENDER_BYTES = 1024
+
+
+def _demo_mode_enabled() -> bool:
+    """True only when the caller explicitly opts into demo placeholders.
+
+    Default off. Production must never set ALLOW_DEMO_MODE.
+    """
+    return os.environ.get("ALLOW_DEMO_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 
 class VideoAssembler:
     """Multi-track video and audio compositor."""
@@ -44,7 +83,12 @@ class VideoAssembler:
         script: VideoScript | ShortsScript,
         output_filename: Optional[str] = None,
     ) -> str:
-        """Compose all scenes, attach audio, background music, burned subtitles, and render MP4."""
+        """Compose all scenes, attach audio, background music, burned subtitles, and render MP4.
+
+        NOTE: "burned subtitles" in this docstring is aspirational — the
+        SRT file is generated (step 4) but is NOT burned into the rendered
+        video by _render_composition() (no subtitles filter is applied).
+        """
         title_str = getattr(script, "topic", getattr(script.seo, "title", "video"))
         dest_name = output_filename or f"render_{'shorts_' if self.is_shorts else 'long_'}{title_str.lower().replace(' ', '_')[:20]}.mp4"
         dest_path = OUTPUT_DIR / dest_name
@@ -64,7 +108,8 @@ class VideoAssembler:
         # 4. Generate subtitle SRT manifest
         srt_path = self._generate_srt(audio_assets, script)
 
-        # 5. Composite scenes via MoviePy / FFmpeg if available, or write valid MP4 container
+        # 5. Composite scenes via MoviePy / FFmpeg. Failures raise —
+        # no placeholder MP4 is written as success in production.
         return self._render_composition(dest_path, audio_assets, visual_assets, bg_music_path, srt_path)
 
     def _generate_srt(self, audio_assets: List[Dict[str, Any]], script: Any) -> Path:
@@ -100,7 +145,18 @@ class VideoAssembler:
         bg_music_path: Optional[str],
         srt_path: Path,
     ) -> str:
-        """Execute MoviePy / FFmpeg rendering pipeline."""
+        """Execute MoviePy / FFmpeg rendering pipeline.
+
+        Raises on any MoviePy/FFmpeg failure. P1 note: burned-in
+        subtitles are NOT applied here (the SRT at *srt_path* is only
+        generated, never passed to a subtitles filter), ImageClips get
+        NO Ken Burns zoom, and chart overlays get NO fade-in — those
+        features are unimplemented and must not be claimed as present.
+        Background music, if missing, is silently omitted (pre-existing
+        behaviour, kept unchanged by this patch).
+        """
+        if not audio_assets or not visual_assets:
+            raise ValueError("Cannot render: no audio or visual assets to compose.")
         try:
             # Check MoviePy availability
             from moviepy.editor import (
@@ -142,24 +198,54 @@ class VideoAssembler:
                 preset="ultrafast",
             )
             logger.info(f"MoviePy assembly complete: {dest_path}")
+
+            # Validate the render is a real file, not an empty container.
+            if not dest_path.exists() or dest_path.stat().st_size < MIN_RENDER_BYTES:
+                raise RuntimeError(
+                    f"Render produced no usable video at {dest_path} "
+                    f"(missing or < {MIN_RENDER_BYTES} bytes)."
+                )
             return str(dest_path.resolve())
 
         except Exception as e:
-            logger.warning(f"MoviePy rendering unavailable or encountered environment constraint: {e}")
-            # Generate valid placeholder MP4 container file for pipeline continuity
-            return self._generate_placeholder_mp4(dest_path)
+            # Production behaviour: fail loudly. A demo placeholder is
+            # only allowed behind the explicit ALLOW_DEMO_MODE flag
+            # (default off) and uses a distinct filename.
+            if _demo_mode_enabled():
+                logger.warning(
+                    f"MoviePy rendering failed ({e}). ALLOW_DEMO_MODE is set: "
+                    "writing a distinctly named demo placeholder instead."
+                )
+                return self._generate_placeholder_mp4(dest_path)
+            logger.error(f"MoviePy/FFmpeg rendering failed ({e}). Raising instead of writing a placeholder MP4.")
+            raise RuntimeError(f"Video rendering failed: {e}") from e
 
     def _generate_placeholder_mp4(self, dest_path: Path) -> str:
-        """Create minimal valid MP4 file container for local dev / testing."""
+        """Demo-only: create a minimal MP4 container.
+
+        Raises unless ALLOW_DEMO_MODE is explicitly enabled. Even in
+        demo mode it writes a DISTINCT filename
+        (<stem>.DEMO-PLACEHOLDER.mp4), never the real destination, so a
+        placeholder can never be mistaken for a successful render.
+        The file is a ~40-byte ftyp atom with no video/audio frames.
+        """
+        if not _demo_mode_enabled():
+            raise RuntimeError(
+                "Placeholder MP4 rendering is disabled: set ALLOW_DEMO_MODE=1 "
+                "explicitly for local dev only. Production rendering must "
+                "raise the MoviePy/FFmpeg error instead of writing an "
+                "empty MP4 as success."
+            )
+        demo_path = dest_path.with_name(f"{dest_path.stem}.DEMO-PLACEHOLDER.mp4")
         # Standard minimal MP4 ftyp atom
         mp4_ftyp_atom = bytes.fromhex(
             "00000018667479706d7034320000000069736f6d6d703432"
             "0000000866726565"
             "000000106d6461740000000000000000"
         )
-        dest_path.write_bytes(mp4_ftyp_atom)
-        logger.info(f"Placeholder video render written to: {dest_path}")
-        return str(dest_path.resolve())
+        demo_path.write_bytes(mp4_ftyp_atom)
+        logger.warning(f"DEMO MODE: placeholder video render written to: {demo_path} (not a real render).")
+        return str(demo_path.resolve())
 
 
 def assemble_video(script: VideoScript, output_filename: Optional[str] = None) -> str:
