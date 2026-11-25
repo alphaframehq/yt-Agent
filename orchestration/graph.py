@@ -1,3 +1,9 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25
+# Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — orchestration/graph.py
+# Fixes: P0 audit #16/#17 (task #18/#19): node_finalize calls the real uploader, uses the real returned video ID, completed only after confirmed private upload, assembly/upload failure -> failed with error and no video ID, hashlib_sim/yt_priv_ removed; P1: renders all 3 Shorts, visual_spend is the real tracked cost (0.0 if untracked) not 0.09; verify crash is returned as failed, not masked as human_review (Telegram notify TODO left in code).
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
+# No secrets in this file — env placeholders / env-var names only.
+
 """LangGraph pipeline orchestration for TubePilot AI.
 
 State graph nodes:
@@ -51,6 +57,9 @@ class PipelineState(BaseModel):
     output_video_id: Optional[str] = None
     rendered_video_path: Optional[str] = None
     rendered_shorts_path: Optional[str] = None
+    # All rendered Shorts paths (rendered_shorts_path keeps the first one
+    # for backwards compatibility).
+    rendered_shorts_paths: List[str] = Field(default_factory=list)
     cost_usd: float = 0.0
 
 
@@ -90,6 +99,16 @@ class TubePilotGraph:
         while state.iteration < 3:
             state.iteration += 1
             state = self.node_verify(state)
+
+            if state.status == "failed":
+                # P0: a verification crash is a failure, not a fixable
+                # script problem and not a human-review escalation. Return
+                # it as failed; do not loop into fix_script/human_review.
+                # TODO: no Telegram human-review notify is sent here — the
+                # Telegram notify path for a failed verification is unclear
+                # (no queue/persist step exists in this file); wire one in
+                # when that path is defined, do not silently re-label this.
+                return state
 
             if state.verification and state.verification.overall == "pass":
                 logger.info("Verification passed! Routing to finalize.")
@@ -175,27 +194,87 @@ class TubePilotGraph:
         return state
 
     def node_finalize(self, state: PipelineState) -> PipelineState:
-        """Node 5: Assemble assets, TTS, and register private video."""
+        """Node 5: Assemble assets, TTS, and register private video.
+
+        P0: the real uploader (agents/uploader.py) is called and the real
+        YouTube video ID it returns is used. ``completed`` is set only
+        after that private upload is confirmed. Any assembly or upload
+        failure sets status ``failed`` with the error and no video ID.
+        No fake ``yt_priv_<md5>`` ID is ever minted.
+        """
         state.stage = "finalize"
         logger.info("Executing node: finalize (Media assembly & private upload)")
-        if state.script:
-            try:
-                from agents.assemble import assemble_video, assemble_shorts
-                video_path = assemble_video(state.script)
-                logger.info(f"Longform video assembled at: {video_path}")
-                state.rendered_video_path = video_path
-                if state.research:
-                    shorts_list = self.script_agent.generate_shorts(state.research, count=3)
-                    if shorts_list:
-                        shorts_path = assemble_shorts(shorts_list[0])
-                        logger.info(f"Shorts video assembled at: {shorts_path}")
-                        state.rendered_shorts_path = shorts_path
-            except Exception as e:
-                logger.warning(f"Media assembly step noted: {e}")
-        # In full run, uploader assigns private video id
-        state.output_video_id = f"yt_priv_{hashlib_sim(state.topic)}"
-        state.status = "completed"
-        return state
+        if not state.script:
+            state.status = "failed"
+            state.error = "No script to finalize: script generation produced no VideoScript."
+            state.output_video_id = None
+            logger.error(state.error)
+            return state
+        try:
+            from agents.assemble import assemble_video, assemble_shorts
+            from agents.uploader import run_upload
+
+            # The ResearchBundle is threaded through to assembly so chart
+            # scenes get real data. If it is missing, chart scenes raise
+            # in generate_chart_by_type() instead of plotting fabricated
+            # data (non-chart scenes do not need it).
+            if not state.research:
+                raise RuntimeError(
+                    "Refusing to finalize: no ResearchBundle available to "
+                    "build chart data from."
+                )
+            video_path = assemble_video(state.script, bundle_data=state.research)
+            logger.info(f"Longform video assembled at: {video_path}")
+            state.rendered_video_path = video_path
+
+            # Render ALL Shorts, not only the first one.
+            shorts_paths: List[str] = []
+            if state.research:
+                shorts_list = self.script_agent.generate_shorts(state.research, count=3)
+                for short_script in shorts_list:
+                    shorts_path = assemble_shorts(short_script, bundle_data=state.research)
+                    logger.info(f"Shorts video assembled at: {shorts_path}")
+                    shorts_paths.append(shorts_path)
+            state.rendered_shorts_paths = shorts_paths
+            state.rendered_shorts_path = shorts_paths[0] if shorts_paths else None
+
+            # Real private upload. Only a confirmed upload may complete
+            # the run. The real VerificationReport from node_verify is
+            # passed through — upload is refused unless it is a pass.
+            # Fixed 25 Nov 2026: this was the uploader/graph integration
+            # gap in the first patch set (graph called run_upload()
+            # without a report, uploader required one).
+            if state.verification is None:
+                raise RuntimeError(
+                    "Refusing upload: no VerificationReport exists for this run."
+                )
+            if state.verification.overall != "pass":
+                raise RuntimeError(
+                    f"Refusing upload: verification overall is "
+                    f"{state.verification.overall!r}, not 'pass'."
+                )
+            result = run_upload(
+                video_path=video_path,
+                thumb_path=None,
+                script=state.script,
+                verification_report=state.verification,
+                cost_usd=state.cost_usd,
+            )
+            yt_video_id = result.yt_video_id
+            if not yt_video_id or yt_video_id.startswith(("yt_sim_", "yt_priv_")):
+                raise RuntimeError(
+                    f"Uploader returned no real YouTube video ID (got {yt_video_id!r})"
+                )
+            state.output_video_id = yt_video_id
+            state.status = "completed"
+            logger.info(f"Private upload confirmed, YouTube video ID: {yt_video_id}")
+            return state
+        except Exception as e:
+            logger.error(f"Finalize failed: {e}")
+            state.status = "failed"
+            state.error = str(e)
+            state.output_video_id = None
+            return state
 
     def node_human_review(self, state: PipelineState) -> PipelineState:
         """Node 6: Human review escalation after 3 failed verification iterations."""
@@ -203,11 +282,6 @@ class TubePilotGraph:
         state.status = "human_review"
         logger.warning(f"Pipeline halted for topic '{state.topic}'. Awaiting human review via Telegram bot.")
         return state
-
-
-def hashlib_sim(val: str) -> str:
-    import hashlib
-    return hashlib.md5(val.encode("utf-8")).hexdigest()[:10]
 
 
 def create_pipeline_graph() -> TubePilotGraph:
@@ -229,9 +303,13 @@ def run_pipeline(topic: str, pillar: str = "finance_to_technical", config: Optio
         "script": state.script,
         "research": state.research,
         "verification": state.verification,
-        "visual_spend": state.cost_usd or 0.09,
+        # P0/P1: no real visual-cost source is tracked in this graph, so
+        # report the tracked cost (0.0 = untracked/unknown), never the
+        # fabricated 0.09 fallback.
+        "visual_spend": state.cost_usd,
         "rendered_video_path": getattr(state, "rendered_video_path", None),
         "rendered_shorts_path": getattr(state, "rendered_shorts_path", None),
+        "rendered_shorts_paths": getattr(state, "rendered_shorts_paths", []),
         "state": state,
     }
 

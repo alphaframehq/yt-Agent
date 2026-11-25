@@ -1,9 +1,22 @@
-"""Unit tests for Phase 7: Telegram Bot Control Plane."""
+"""Unit tests for Phase 7: Telegram Bot Control Plane.
+
+2026-11-25 update: tests 6, 7, 12 and 14 previously asserted the
+mock/demo behaviour (fake "Pipeline Dispatched", "VIDEO PUBLISHED
+PUBLIC" for a fake ID, a preview card for a fake yt_priv_ ID, and a
+hardcoded script audit). The P0 patches removed those fakes, so these
+tests now assert the fail-loud behaviour instead."""
 
 import os
 import sys
 import unittest
 from pathlib import Path
+
+# Module-level: config_manager.py / tools/secrets.py read
+# ALLOW_IN_MEMORY_* once at import time. unittest discover imports
+# test_bot.py first (alphabetical), so setting the flags here — before
+# telegram_bot.bot is imported below — covers every test module.
+os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
+os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
 
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -23,6 +36,10 @@ class TestTelegramBot(unittest.TestCase):
     def setUpClass(cls):
         os.environ["MASTER_SECRET"] = "tubepilot-master-secret-key-32-chars-long!"
         os.environ["TELEGRAM_ADMIN_ID"] = "12345"
+        # Explicit in-memory dev mode for CI (no DynamoDB in CI). The
+        # patched config/secrets modules raise without these flags.
+        os.environ["ALLOW_IN_MEMORY_CONFIG"] = "1"
+        os.environ["ALLOW_IN_MEMORY_SECRETS"] = "1"
 
     def test_1_ping_command_returns_health_under_5_seconds(self):
         """Verify /ping returns comprehensive health in < 5 seconds."""
@@ -79,8 +96,10 @@ class TestTelegramBot(unittest.TestCase):
 
     def test_6_execution_commands(self):
         """Verify /run, /status, /pause, and /resume."""
+        # No GH_PAT in CI: dispatch must report failure, never fake success.
         res_run = handle_command(user_id=12345, command="run", args=["How", "Plaid", "Connects", "Banks"])
-        self.assertIn("Pipeline Dispatched", res_run["text"])
+        self.assertIn("Dispatch failed", res_run["text"])
+        self.assertNotIn("Pipeline Dispatched", res_run["text"])
 
         res_pause = handle_command(user_id=12345, command="pause", args=[])
         self.assertIn("Pipeline paused", res_pause["text"])
@@ -90,14 +109,14 @@ class TestTelegramBot(unittest.TestCase):
 
     def test_7_approval_callbacks(self):
         """Verify interactive approval callback handlers."""
-        # [✅ Publish]
-        res_pub = handle_callback_query("pub_test_yt_video_888")
-        self.assertIn("VIDEO PUBLISHED PUBLIC", res_pub["text"])
-        self.assertIn("test_yt_video_888", res_pub["text"])
+        # [✅ Publish] without YouTube credentials must raise, never
+        # claim a video was published public.
+        with self.assertRaises(Exception):
+            handle_callback_query("pub_test_yt_video_888")
 
-        # [❌ Reject]
+        # [❌ Reject] of an unknown video must take no action.
         res_rej = handle_callback_query("rej_test_yt_video_888")
-        self.assertIn("rejected", res_rej["text"])
+        self.assertIn("no action taken", res_rej["text"])
 
     def test_8_codespace_commands(self):
         """Verify /codespace list and stop."""
@@ -167,11 +186,10 @@ class TestTelegramBot(unittest.TestCase):
 
     def test_12_video_preview_command(self):
         """Verify /preview command and preview callback."""
-        # Test preview with YouTube ID
+        # Test preview with a non-existent video ID: no fake preview.
         res_prev = handle_command(user_id=12345, command="preview", args=["yt_priv_test999"])
-        self.assertIn("Video Production Preview", res_prev["text"])
-        self.assertIn("yt_priv_test999", res_prev["text"])
-        self.assertTrue(any("pub_yt_priv_test999" in b.get("callback_data", "") for b in res_prev.get("buttons", [])))
+        self.assertIn("No preview available", res_prev["text"])
+        self.assertFalse(any("pub_yt_priv_test999" in b.get("callback_data", "") for b in res_prev.get("buttons", [])))
 
         # Test callback for preview
         cb_prev = handle_callback_query("prv_yt_priv_test999")
@@ -190,13 +208,11 @@ class TestTelegramBot(unittest.TestCase):
     def test_14_script_and_audit_inspector(self):
         """Verify /script and fact-check verification audit review."""
         res_script = handle_command(user_id=12345, command="script", args=["Stripe"])
-        self.assertIn("Fact-Check Verification Audit", res_script["text"])
-        self.assertIn("Claim Provenance Check", res_script["text"])
-        self.assertIn("Overall Verification Status", res_script["text"])
+        self.assertIn("No script/audit found", res_script["text"])
 
         # Test callback menu_script
         cb_script = handle_callback_query("menu_script")
-        self.assertIn("Fact-Check Verification Audit", cb_script["text"])
+        self.assertIn("No script/audit found", cb_script["text"])
 
     def test_15_ideas_and_quick_queue(self):
         """Verify /ideas brainstorm and 1-tap queueing callback."""
@@ -221,3 +237,4 @@ class TestTelegramBot(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

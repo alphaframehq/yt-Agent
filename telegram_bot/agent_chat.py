@@ -1,3 +1,8 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 — alphaframehq/yt-Agent main c39f42541b8e784dcf41c09583dc57227be07667
+# P0 fix (#23): _build_grounding_context() omits the video section's fake entry and states 'No videos produced
+#   yet' when list_recent_videos() is empty. Removed injected fake yt_priv_1292805d8f 'REAL VERIFIED SYSTEM
+#   CONTEXT' Stripe video (also filtered out if that ID is present in the DB).
+# Local patch only — do NOT push to GitHub.
 """Agent Chat Assistant for TubePilot AI Telegram Control Plane.
 
 Provides grounded, anti-hallucination conversational intelligence for the YouTube channel owner.
@@ -74,8 +79,8 @@ def _build_grounding_context() -> str:
     pending = [t.get("topic") for t in topics if t.get("status") == "pending"]
     running = [t.get("topic") for t in topics if t.get("status") == "running"]
 
-    # Real videos
-    recent_vids = list_recent_videos(limit=3)
+    # Real videos only — the known fake placeholder ID is never injected.
+    recent_vids = [v for v in list_recent_videos(limit=3) if v.get("video_id") != "yt_priv_1292805d8f"]
     vid_lines = []
     for v in recent_vids:
         vid_id = v.get("video_id", "unknown")
@@ -84,7 +89,8 @@ def _build_grounding_context() -> str:
         vid_lines.append(f"- ID: {vid_id} | Title: '{title}' | Status: {status} | URL: https://youtu.be/{vid_id}")
 
     if not vid_lines:
-        vid_lines.append("- ID: yt_priv_1292805d8f | Title: 'How Stripe Makes Money (P&L Breakdown)' | Status: PRIVATE | URL: https://youtu.be/yt_priv_1292805d8f")
+        # P0 #23: no videos exist, so say so — never invent one.
+        vid_lines.append("- No videos produced yet.")
 
     # Cloud runner info
     is_gh = os.getenv("GITHUB_ACTIONS") == "true"

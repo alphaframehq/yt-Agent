@@ -1,4 +1,12 @@
-"""Unit tests for Phase 2: External Tools."""
+"""Unit tests for Phase 2: External Tools.
+
+2026-11-25 rewrite: the old tests asserted that every tool returned
+fabricated data without credentials (fake images, invented financials,
+fabricated articles, fake YouTube research, silence audio). Those
+mock/demo fallbacks are removed. These tests now assert the new
+fail-loud behaviour: missing keys / failed APIs raise instead of
+returning fake success.
+"""
 
 import os
 import sys
@@ -7,6 +15,9 @@ from pathlib import Path
 
 # Ensure yt-agent root is on python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
+os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
 
 from tools.llm_provider import LLMProvider, call_with_fallback
 from tools.image_gen import generate_image, get_cached_image_path
@@ -30,6 +41,14 @@ class TestPhase2Tools(unittest.TestCase):
         p2 = LLMProvider("bedrock", "claude-3-5-haiku")
         self.assertEqual(p2.provider, "bedrock")
 
+    def test_llm_provider_raises_without_key(self):
+        """Without a Gemini key, the provider must raise instead of
+        returning a fake '{}' success (which used to short-circuit the
+        OpenRouter fallback)."""
+        provider = LLMProvider("gemini", "gemini-2.0-flash")
+        with self.assertRaises(Exception):
+            provider.call("You are a test assistant.", "test prompt")
+
     def test_ssml_formatting(self):
         """Verify SSML builder sanitizes XML and applies prosody rules."""
         raw = "Stripe's revenue grew by 25% in 2024 & processed $1T."
@@ -47,11 +66,11 @@ class TestPhase2Tools(unittest.TestCase):
         self.assertEqual(p1, p2)
         self.assertEqual(p1.suffix, ".png")
 
-    def test_image_gen_fallback(self):
-        """Verify fallback image generation creates valid visual asset."""
-        img_path = generate_image("Test Fintech Hook", model="gemini/imagen-3.0-generate-001")
-        self.assertTrue(os.path.exists(img_path))
-        self.assertGreater(Path(img_path).stat().st_size, 0)
+    def test_image_gen_raises_without_key(self):
+        """Without an image-generation key, generate_image must raise
+        instead of returning a Pillow placeholder card / 0-byte file."""
+        with self.assertRaises(Exception):
+            generate_image("Test Fintech Hook", model="gemini/imagen-3.0-generate-001")
 
     def test_yfinance_tool_structure(self):
         """Verify yfinance returns expected dictionary schema with margins."""
@@ -66,26 +85,23 @@ class TestPhase2Tools(unittest.TestCase):
         res = search_company_filings("AAPL")
         self.assertEqual(res["ticker"], "AAPL")
 
-    def test_tinyfish_fintech_context(self):
-        """Verify fintech news/trend context gathering."""
-        articles = search_fintech_context("Stripe interchange fees")
-        self.assertGreater(len(articles), 0)
-        self.assertIn("title", articles[0])
-        self.assertIn("snippet", articles[0])
+    def test_tinyfish_raises_without_key(self):
+        """Without a TinyFish key, search must raise instead of returning
+        fabricated articles with fake URLs."""
+        with self.assertRaises(Exception):
+            search_fintech_context("Stripe interchange fees")
 
-    def test_youtube_api_topic_research(self):
-        """Verify YouTube competitor insights extraction."""
-        insights = research_topic("How Revolut Makes Money")
-        self.assertIn("top_titles", insights)
-        self.assertGreater(len(insights["top_titles"]), 0)
-        self.assertIn("common_tags", insights)
-        self.assertGreaterEqual(len(insights["common_tags"]), 5)
+    def test_youtube_api_topic_research_raises_without_service(self):
+        """Without YouTube credentials, research_topic must raise instead
+        of returning invented titles/tags."""
+        with self.assertRaises(Exception):
+            research_topic("How Revolut Makes Money")
 
-    def test_polly_tts_synthesis(self):
-        """Verify speech synthesis returns audio file and positive duration."""
-        audio_path, duration = synthesize_speech("Welcome to TubePilot AI financial breakdowns.")
-        self.assertTrue(os.path.exists(audio_path))
-        self.assertGreater(duration, 0.0)
+    def test_polly_tts_synthesis_raises_without_aws(self):
+        """Without AWS Polly credentials, synthesis must raise instead of
+        returning a 1-second silence stub."""
+        with self.assertRaises(Exception):
+            synthesize_speech("Welcome to TubePilot AI financial breakdowns.")
 
 
 if __name__ == "__main__":

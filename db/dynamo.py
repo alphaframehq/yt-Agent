@@ -1,3 +1,8 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 — Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
+# Source: alphaframehq/yt-Agent @ main c39f42541b8e784dcf41c09583dc57227be07667
+# Fix (PR #1 follow-up): log_verification() no longer defaults a missing
+# overall/confidence to "pass"/1.0 — it now records "not_run"/0.0, and a
+# missing model_used records "unknown" (not the Bedrock model name).
 """DynamoDB Data Access Layer for TubePilot AI.
 
 Supports all 7 provisioned DynamoDB tables:
@@ -188,9 +193,13 @@ def log_verification(video_id: str, iteration: int, report_dict: Dict[str, Any])
     item = {
         "video_id": video_id,
         "iteration": iteration,
-        "overall": report_dict.get("overall", "pass"),
-        "confidence": report_dict.get("confidence", 1.0),
-        "model_used": report_dict.get("model_used", "claude-3-5-haiku"),
+        # Production fix (PR #1, 25 Nov 2026): a missing overall/confidence
+        # must NOT default to a passing verdict. "not_run" / 0.0 means no
+        # verification actually ran; callers (and /script) must treat that
+        # as unverified, never as PASS.
+        "overall": report_dict.get("overall", "not_run"),
+        "confidence": report_dict.get("confidence", 0.0),
+        "model_used": report_dict.get("model_used", "unknown"),
         "report_json": json.dumps(report_dict),
         "created_at": int(time.time()),
         "ttl": ttl,
@@ -411,5 +420,6 @@ def get_latest_verification_log(video_id: str) -> Optional[Dict[str, Any]]:
         matches.sort(key=lambda x: x.get("created_at", 0), reverse=True)
         return matches[0]
     return None
+
 
 

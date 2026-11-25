@@ -1,3 +1,7 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 — alphaframehq/yt-Agent main c39f42541b8e784dcf41c09583dc57227be07667
+# P1 fix (#15): handle_codespace_command() stop/run return 'Could not stop/start <name>: <error>' on GH API/CLI
+#   failure instead of fake 'signal dispatched'. A 204 (empty-body) start response is handled without parsing JSON.
+# Local patch only — do NOT push to GitHub.
 """GitHub Codespaces auto-stop and management command handler for TubePilot AI.
 
 Production runs happen exclusively on GitHub Actions.
@@ -149,9 +153,10 @@ def handle_codespace_command(args: List[str]) -> str:
             res = subprocess.run(["gh", "codespace", "stop", "-c", name], capture_output=True, text=True, timeout=15)
             if res.returncode == 0:
                 return f"🛑 Codespace `{name}` successfully stopped."
-            return f"⚠️ Could not stop codespace `{name}`: {res.stderr}"
+            return f"❌ Could not stop codespace `{name}`: {res.stderr.strip() or res.stdout.strip() or 'gh CLI failed'}"
         except Exception as e:
-            return f"🛑 Stop signal dispatched for `{name}` ({e})."
+            # P1 #15: a CLI exception is a failure, not a dispatched signal.
+            return f"❌ Could not stop codespace `{name}`: {e}"
 
     elif subcmd in ("run", "start"):
         name = args[1] if len(args) > 1 else ""
@@ -167,15 +172,20 @@ def handle_codespace_command(args: List[str]) -> str:
                         headers={"Authorization": f"Bearer {gh_pat}", "Accept": "application/vnd.github.v3+json"},
                     )
                     if resp.status_code in (200, 204):
-                        data = resp.json()
+                        # 204 has an empty body — do not parse JSON from it.
+                        data = resp.json() if resp.status_code == 200 and resp.content else {}
                         web_url = data.get("web_url")
-                        return (
-                            f"🚀 Codespace `{name}` starting up!\n\n"
-                            f"👉 [Open in Browser]({web_url})"
-                        )
+                        if web_url:
+                            return (
+                                f"🚀 Codespace `{name}` starting up!\n\n"
+                                f"👉 [Open in Browser]({web_url})"
+                            )
+                        return f"🚀 Codespace `{name}` starting up! (GitHub API confirmed start, no browser URL returned)"
+                    logger.warning(f"GitHub API start codespace failed ({resp.status_code}): {resp.text}")
             except Exception as e:
                 logger.warning(f"REST API start codespace notice: {e}")
 
-        return f"🚀 Resume signal dispatched for codespace `{name}`."
+        # P1 #15: no start was confirmed — do not claim a signal was dispatched.
+        return f"❌ Could not start codespace `{name}`: GitHub API did not confirm the start (and no CLI start path is implemented)."
 
     return f"Unknown codespace command: `{subcmd}`"

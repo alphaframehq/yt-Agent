@@ -1,3 +1,7 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 — alphaframehq/yt-Agent main c39f42541b8e784dcf41c09583dc57227be07667
+# P0 fix (#20): dispatch_pipeline_run() returns dispatched=False with explicit details in every failure path
+#   (no GH_PAT, non-204 GitHub response, HTTP error) — dispatched=True only on HTTP 204. No fake success.
+# Local patch only — do NOT push to GitHub.
 """GitHub Actions Workflow Dispatcher and Message Bus Bridge for TubePilot AI.
 
 Dispatches pipeline execution without webhooks or public server URLs:
@@ -69,7 +73,8 @@ def dispatch_pipeline_run(topic: str, pillar: str = "finance_to_technical") -> D
         except Exception as e:
             details = f"HTTP dispatch request failed: {e}"
     else:
-        details = "GH_PAT not configured. Request recorded in DynamoDB topics queue for scheduled cron run."
+        # dispatched stays False: no GitHub dispatch was even attempted.
+        details = "❌ Dispatch failed: GH_PAT not configured — GitHub dispatch not attempted. Request recorded in DynamoDB topics queue for scheduled cron run."
 
     return {
         "dispatched": dispatched,

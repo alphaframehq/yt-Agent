@@ -1,3 +1,9 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25
+# Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — tools/secrets.py
+# Fixes: P0 audit #25 (region) + P1 #11 (task #27 partial): DynamoDB failure raises in production; in-memory-only storage only with explicit ALLOW_IN_MEMORY_SECRETS=1 (default off); get_secret raises on decrypt failure when a stored token exists; test_secret() returns False for untested providers instead of True. Fernet encryption unchanged.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
+# No secrets in this file — env placeholders / env-var names only.
+
 """
 Encrypted secrets manager for TubePilot AI.
 
@@ -5,6 +11,10 @@ Encryption: Fernet with key derived from the ``MASTER_SECRET`` env var
 (PBKDF2-HMAC-SHA256, 480 000 iterations).
 Storage: DynamoDB ``yt_config`` table (config_id = "keys").
 Env-var fallback for first-boot / local dev.
+Production behaviour: DynamoDB unavailable -> fail loudly (RuntimeError).
+In-memory-only storage is used ONLY when the explicit dev flag
+``ALLOW_IN_MEMORY_SECRETS=1`` is set (default off).
+AWS region comes from the single env var ``AWS_REGION``.
 """
 
 from __future__ import annotations
@@ -60,31 +70,50 @@ _VALIDATION_RULES: dict[str, dict[str, Any]] = {
 _dynamo_table: Any = None
 _dynamo_available: bool | None = None
 
+# Single source of truth for the AWS region: env var AWS_REGION only.
+_AWS_REGION: str | None = os.environ.get("AWS_REGION") or None
+# Explicit opt-in for local dev only. Default off: in production a
+# DynamoDB failure must raise, never silently keep secrets in-memory only.
+_ALLOW_IN_MEMORY_SECRETS: bool = os.environ.get("ALLOW_IN_MEMORY_SECRETS", "").strip().lower() in ("1", "true", "yes")
 
 def _get_table() -> Any:
-    """Return the DynamoDB Table resource, or *None* if unavailable."""
+    """Return the DynamoDB Table resource.
+
+    Raises:
+        RuntimeError: If DynamoDB is unavailable and the explicit dev
+            flag ``ALLOW_IN_MEMORY_SECRETS`` is not set. In dev-flag mode
+            only, returns ``None``.
+    """
     global _dynamo_table, _dynamo_available
 
     if _dynamo_available is False:
-        return None
+        if _ALLOW_IN_MEMORY_SECRETS:
+            return None
+        raise RuntimeError(
+            "DynamoDB unavailable for secrets (see earlier log line); "
+            "set ALLOW_IN_MEMORY_SECRETS=1 only for explicit local dev"
+        )
     if _dynamo_table is not None:
         return _dynamo_table
 
     try:
         import boto3  # noqa: WPS433
 
-        _dynamo_table = boto3.resource("dynamodb").Table(_TABLE_NAME)
+        _dynamo_table = boto3.resource("dynamodb", region_name=_AWS_REGION).Table(_TABLE_NAME)
         _dynamo_table.table_status  # noqa: B018
         _dynamo_available = True
         logger.info("Secrets DynamoDB table '{}' connected", _TABLE_NAME)
         return _dynamo_table
     except Exception as exc:  # noqa: BLE001
         _dynamo_available = False
-        logger.warning(
-            "DynamoDB unavailable for secrets ({}); env-var fallback active",
-            exc,
-        )
-        return None
+        if _ALLOW_IN_MEMORY_SECRETS:
+            logger.warning(
+                "DynamoDB unavailable for secrets ({}); ALLOW_IN_MEMORY_SECRETS=1, "
+                "in-memory only (dev only)",
+                exc,
+            )
+            return None
+        raise RuntimeError(f"DynamoDB unavailable for secrets: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +178,16 @@ _in_memory_secrets: dict[str, str] = {}
 def _load_secrets_record() -> dict[str, str]:
     """Load the encrypted secrets record from DynamoDB.
 
-    Returns in-memory fallback dict when DynamoDB is unavailable.
+    Raises:
+        RuntimeError: In production when DynamoDB is unavailable or the
+            read fails. In dev-flag mode only, returns the in-memory dict.
     """
     table = _get_table()
     if table is None:
+        if not _ALLOW_IN_MEMORY_SECRETS:
+            raise RuntimeError(
+                "DynamoDB unavailable for secrets and ALLOW_IN_MEMORY_SECRETS is not set"
+            )
         return dict(_in_memory_secrets)
     try:
         resp = table.get_item(Key={"config_id": _SECRETS_ID})
@@ -162,24 +197,34 @@ def _load_secrets_record() -> dict[str, str]:
             _in_memory_secrets.update(data)
         return data or dict(_in_memory_secrets)
     except Exception as exc:  # noqa: BLE001
+        if not _ALLOW_IN_MEMORY_SECRETS:
+            raise RuntimeError(f"Failed to load secrets from DynamoDB: {exc}") from exc
         logger.warning("Failed to load secrets from DynamoDB: {}", exc)
         return dict(_in_memory_secrets)
 
 
 def _save_secrets_record(secrets: dict[str, str]) -> None:
-    """Write the full encrypted secrets record to DynamoDB and in-memory cache."""
+    """Write the full encrypted secrets record to DynamoDB and in-memory cache.
+
+    Raises:
+        RuntimeError: If DynamoDB is unavailable (production) or the
+            write fails. Callers (set/rotate/delete/import) must treat
+            a raise as "not persisted".
+    """
     global _in_memory_secrets
-    _in_memory_secrets = dict(secrets)
-    table = _get_table()
+    table = _get_table()  # raises in production when DynamoDB is down
     if table is None:
-        logger.warning("DynamoDB unavailable — secrets persisted in-memory only")
+        # Dev-flag mode only: _get_table() returns None instead of raising.
+        _in_memory_secrets = dict(secrets)
+        logger.warning("DynamoDB unavailable — secrets persisted in-memory only (ALLOW_IN_MEMORY_SECRETS=1, dev only)")
         return
     try:
         item = {"config_id": _SECRETS_ID, **secrets}
         table.put_item(Item=item)
+        _in_memory_secrets = dict(secrets)
         logger.info("Secrets record persisted to DynamoDB")
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to save secrets to DynamoDB: {}", exc)
+        raise RuntimeError(f"Failed to save secrets to DynamoDB: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +327,11 @@ def get_secret(name: str) -> Optional[str]:
 
     Returns:
         Decrypted secret string, or ``None`` if not found anywhere.
+
+    Raises:
+        RuntimeError: If a stored token exists but cannot be decrypted
+            (wrong MASTER_SECRET / corrupt token) — never silently falls
+            back to the env var in that case.
     """
     secrets = _load_secrets_record()
     token = secrets.get(name)
@@ -291,9 +341,15 @@ def get_secret(name: str) -> Optional[str]:
             logger.debug("Secret '{}' loaded from DynamoDB", name)
             return plaintext
         except (InvalidToken, RuntimeError) as exc:
-            logger.error("Failed to decrypt secret '{}': {}", name, exc)
+            # P0: a stored token that cannot be decrypted is a real
+            # failure (wrong MASTER_SECRET / corrupt token) — never
+            # silently fall through to the env var and use a different
+            # secret than the one that was stored.
+            raise RuntimeError(
+                f"Failed to decrypt stored secret '{name}': {exc}"
+            ) from exc
 
-    # Env-var fallback
+    # Env-var fallback (only when no stored token exists)
     env_val = os.environ.get(name)
     if env_val:
         logger.debug("Secret '{}' loaded from env var (first-boot fallback)", name)
@@ -364,6 +420,8 @@ def test_secret(name: str) -> bool:
 
     Returns:
         ``True`` if the key appears valid and the service responds.
+        ``False`` for providers with no live test implemented (never
+        ``True`` by assumption).
     """
     value = get_secret(name)
     if value is None:
@@ -431,8 +489,8 @@ def test_secret(name: str) -> bool:
             )
             return resp.status_code == 200 and resp.json().get("ok", False)
 
-        logger.info("No live test implemented for '{}'", name)
-        return True  # no test available — assume valid
+        logger.warning("No live test implemented for '{}' — returning False, not assuming valid", name)
+        return False
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Live test for '{}' failed: {}", name, exc)
