@@ -5,15 +5,29 @@ Verifies that all paths through the StateGraph are fully reachable:
 2. Fix loop: verify fails on iteration 1 -> fix_script resolves -> verify passes on iteration 2 -> finalize
 3. Escalation: verify fails 3 consecutive iterations -> human_review
 4. Self-healing run_stage wrapper: transient failures retried and healed autonomously
+
+2026-11-25 rewrite: the old happy-path test ran the full pipeline with
+no credentials and asserted on the fabricated result (a fake yt_priv_
+video ID and a verified-pass verdict). The P0 patches removed those
+fakes: with no LLM / research sources, the pipeline now fails loudly
+with no video ID. That fail-loud behaviour is asserted here. The
+fix-loop and escalation tests now build their state from explicit
+fixtures instead of calling run_research() with no keys.
 """
 
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
+os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
+
+from _fixtures import make_test_bundle, make_test_script
 from orchestration.graph import PipelineState, TubePilotGraph
 from pipeline import run_pipeline, run_stage
 from workflow.healer import HealingContext
@@ -22,30 +36,28 @@ from workflow.healer import HealingContext
 class TestPipelineGraph(unittest.TestCase):
     """Test suite for LangGraph state machine and execution paths."""
 
-    def test_happy_path_completes(self):
-        """Verify normal flow reaches finalize and assigns private video ID."""
+    def test_happy_path_fails_loudly_without_credentials(self):
+        """With no LLM key / research sources, the pipeline must FAIL
+        loudly — no fake yt_priv_ video ID, no verified-pass verdict,
+        no 'completed' status."""
         graph = TubePilotGraph()
         state = graph.run(topic="How Stripe Makes Money", pillar="finance_to_technical")
 
-        self.assertEqual(state.status, "completed")
-        self.assertEqual(state.stage, "finalize")
-        self.assertIsNotNone(state.output_video_id)
-        self.assertTrue(state.output_video_id.startswith("yt_priv_"))
-        self.assertIsNotNone(state.research)
-        self.assertIsNotNone(state.script)
-        self.assertEqual(state.verification.overall, "pass")
+        self.assertEqual(state.status, "failed")
+        self.assertIsNone(state.output_video_id)
+        self.assertIsNotNone(state.error)
 
     def test_fix_loop_path(self):
         """Verify that fix_script modifies script and re-triggers verify."""
         graph = TubePilotGraph()
-        # Initialize state with a script that has a fixable forbidden phrase
+        # Build state from explicit fixtures instead of live research.
         state = PipelineState(topic="Test Fix Loop Topic", pillar="finance_to_technical")
-        state = graph.node_research(state)
-        state = graph.node_script(state)
-        
+        state.research = make_test_bundle()
+        state.script = make_test_script(state.research)
+
         # Inject fixable advice into scene
         state.script.scenes[0].narration += " In our view, you should buy into this architecture."
-        
+
         # Verify will fail
         state.iteration = 1
         state = graph.node_verify(state)
@@ -60,12 +72,12 @@ class TestPipelineGraph(unittest.TestCase):
         """Verify that 3 consecutive verification failures escalate to human_review."""
         graph = TubePilotGraph()
         state = PipelineState(topic="Unfixable Topic", pillar="finance_to_technical")
-        state = graph.node_research(state)
-        state = graph.node_script(state)
-        
+        state.research = make_test_bundle()
+        state.script = make_test_script(state.research)
+
         # Make script unfixable (remove all sections except hook)
         state.script.scenes = [state.script.scenes[0]]
-        
+
         # Run 3 verify iterations
         for it in range(1, 4):
             state.iteration = it
@@ -91,7 +103,7 @@ class TestPipelineGraph(unittest.TestCase):
 
         context = HealingContext(stage="flaky_stage", attempt=1, max_retries=3)
         result = run_stage(flaky_api_call, context)
-        
+
         self.assertEqual(result, "SUCCESS_DATA")
         self.assertEqual(calls["count"], 2)
 

@@ -1,4 +1,11 @@
-"""Unit tests for Phase 6: Upload, DynamoDB, and Ephemeral Storage."""
+"""Unit tests for Phase 6: Upload, DynamoDB, and Ephemeral Storage.
+
+2026-11-25 rewrite: the old setUpClass called run_research()/run_script()
+with no credentials and relied on the production mock/demo fallbacks to
+fabricate a bundle, script, and a fake YouTube upload of a 29-byte dummy
+file. Those fallbacks are removed. Tests now use explicit fixtures and
+assert the uploader's fail-loud gates.
+"""
 
 import os
 import sys
@@ -8,8 +15,10 @@ from pathlib import Path
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agents.research import run_research
-from agents.script import run_script
+os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
+os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
+
+from _fixtures import make_test_bundle, make_test_script
 from agents.uploader import UploaderAgent, run_upload
 from db.dynamo import (
     cache_research,
@@ -26,7 +35,20 @@ from db.dynamo import (
     write_bot_request,
 )
 from db.setup_dynamo import setup_all_tables
+from models.verification import CheckResult, VerificationReport
 from storage.ephemeral import EphemeralWorkspace, purge_local_media, startup_orphan_sweep
+
+
+def _fail_report():
+    return VerificationReport(
+        overall="fail",
+        confidence=0.5,
+        checks=[CheckResult(name="FACTUAL_ACCURACY", status="fail", issues=[])],
+        suggested_fixes=[],
+        model_used="test",
+        deterministic_time_ms=10,
+        llm_time_ms=0,
+    )
 
 
 class TestStorageAndUploader(unittest.TestCase):
@@ -34,8 +56,8 @@ class TestStorageAndUploader(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.bundle = run_research("How Stripe Makes Money", "finance_to_technical")
-        cls.script = run_script(cls.bundle)
+        cls.bundle = make_test_bundle()
+        cls.script = make_test_script(cls.bundle)
 
     def test_1_dynamo_table_setup_call(self):
         """Verify setup_all_tables executes cleanly without crashing."""
@@ -109,34 +131,45 @@ class TestStorageAndUploader(unittest.TestCase):
         self.assertGreaterEqual(cleaned, 1)
         self.assertFalse(orphaned.exists())
 
-    def test_7_uploader_agent_flow_and_post_upload_purge(self):
-        """Verify upload_and_register: uploads private, writes to DynamoDB, purges local file."""
-        # Create temporary video file
+    def test_7_uploader_requires_verification_report(self):
+        """upload_and_register must refuse without a passing
+        VerificationReport — the old signature took no report at all
+        and recorded a hardcoded verification_score of 1.0."""
         sample_vid = Path("cache/renders/temp_upload_test.mp4")
         sample_vid.write_bytes(b"sample_video_container_bytes")
-        self.assertTrue(sample_vid.exists())
-
         uploader = UploaderAgent()
-        result = uploader.upload_and_register(
-            video_path=str(sample_vid),
-            thumb_path=None,
-            script=self.script,
-            cost_usd=0.08,
-        )
+        # Missing the required verification_report argument.
+        with self.assertRaises(TypeError):
+            uploader.upload_and_register(
+                video_path=str(sample_vid),
+                thumb_path=None,
+                script=self.script,
+                cost_usd=0.08,
+            )
+        # A failing report must also be refused, and the local file
+        # must be left intact (never purged on a refused upload).
+        with self.assertRaises(Exception):
+            uploader.upload_and_register(
+                video_path=str(sample_vid),
+                thumb_path=None,
+                script=self.script,
+                verification_report=_fail_report(),
+                cost_usd=0.08,
+            )
+        self.assertTrue(sample_vid.exists())
+        sample_vid.unlink(missing_ok=True)
 
-        # 1. Result populated
-        self.assertIsNotNone(result.video_id)
-        self.assertIsNotNone(result.yt_video_id)
-        self.assertEqual(result.status, "pending_approval")
-        self.assertEqual(len(result.approval_buttons), 5)
-
-        # 2. Local file MUST be deleted (YouTube IS the storage)
-        self.assertFalse(sample_vid.exists(), "Local video file was not purged post-upload!")
-
-        # 3. DynamoDB record verified
-        db_rec = get_video_record(result.video_id)
-        self.assertIsNotNone(db_rec)
-        self.assertEqual(db_rec["status"], "pending_approval")
+    def test_8_log_verification_defaults_to_not_run(self):
+        """A verification log entry with no overall/confidence must
+        record 'not_run' / 0.0, never a default PASS / 1.0."""
+        log_verification("vid_test_default", 1, {})
+        # The in-memory fallback store is the only store in CI; read
+        # the record back through the module's store if present.
+        from db.dynamo import _IN_MEMORY_STORE
+        rec = _IN_MEMORY_STORE["yt_verification_log"].get("vid_test_default#1")
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["overall"], "not_run")
+        self.assertEqual(rec["confidence"], 0.0)
 
 
 if __name__ == "__main__":

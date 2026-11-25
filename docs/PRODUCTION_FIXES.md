@@ -231,3 +231,35 @@ All 27 P0 items have a patch. "Covered" means the silent mock / fake success is 
 - **`.env.example` / README** — not updated in the original patch set; a corrected `.env.example` was added 25 Nov 2026 in this folder (`fixes/.env.example`): `AWS_REGION=us-east-2`, Gemini + OpenRouter only (no Bedrock), `YT_REFRESH_TOKEN` and `GEMINI_KEY_POOL` added. README still needs the same update.
 - **`db/dynamo.py`, `agents/visuals.py`, `agents/tts.py`, `tools/fal_ai.py`, `tools/replicate_tool.py`, `tools/sec_edgar.py`, `tools/pixabay.py`, `scripts/notify_success.py`, `storage/ephemeral.py`, tests** — not patched. `visuals.py` in particular must be updated to pass bundle data to charts (see §2). Tests were not run and not updated; several existing tests assert the old demo behaviour (e.g. `yt_priv_` ID format, mock data) and will fail against the patched code — that is expected and those tests need updating before the patches are applied.
 - **No files were pushed, branched, or run.** Applying, testing, and the GCP/YouTube OAuth setup are separate steps requiring the user (see §3).
+
+## 7. Follow-ups applied on branch fix/production-mocks (25 Nov 2026, PR #1)
+
+- **Visuals wiring (was §6, now resolved)** — `agents/visuals.py` gained
+  `research_bundle_to_chart_data(bundle)` (only values actually present in
+  the bundle; TAM 0.0 sentinel omitted; market-share and competitor-matrix
+  omitted — those charts raise until a real source is wired).
+  `agents/assemble.py` `assemble()` / `assemble_video()` / `assemble_shorts()`
+  accept `bundle_data`; `orchestration/graph.py` `node_finalize` now requires
+  `state.research` and passes `bundle_data=state.research` to both assemble
+  calls. Chart scenes raise without a bundle instead of plotting fabricated
+  data.
+- **`db/dynamo.py` log_verification defaults (was §6, now resolved)** —
+  defaults changed from `overall="pass"` / `confidence=1.0` to `"not_run"` /
+  `0.0`, and `model_used` default from `"claude-3-5-haiku"` to `"unknown"`.
+- **Stale comments** — all "NOT pushed to GitHub" / "TODO: agents/uploader.py
+  does not yet accept" notes corrected; `agents/uploader.py` header now says
+  graph passes the real VerificationReport.
+- **Tests rewritten for the fail-loud behaviour (25 Nov 2026)** — the old
+  tests asserted the demo behaviour and failed against the patched code by
+  design. Rewritten: `tests/test_verify.py`, `test_research.py`,
+  `test_media.py`, `test_tools.py`, `test_storage_uploader.py`,
+  `test_graph.py`, `test_bot.py` (tests 6, 7, 12, 14), plus a shared
+  fixture module `tests/_fixtures.py` (`make_test_bundle()` /
+  `make_test_script()` — explicit, labelled test data only, never used by
+  production code). Tests now assert that missing keys / sources / services
+  raise instead of returning fake success, and that a failing
+  VerificationReport blocks upload.
+- **CI env flags (25 Nov 2026)** — `.github/workflows/ci.yml` test job now
+  sets `ALLOW_IN_MEMORY_CONFIG=1` and `ALLOW_IN_MEMORY_SECRETS=1` (CI has no
+  DynamoDB; these flags are test-only and do not enable any mock/demo
+  fallback in production code).

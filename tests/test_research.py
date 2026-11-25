@@ -1,5 +1,15 @@
-"""Unit tests for Agent 1: Research Agent."""
+"""Unit tests for Agent 1: Research Agent.
 
+2026-11-25 rewrite: the old tests called run_research() for private
+companies (Revolut) and unknown topics (Solana Pay) and asserted on the
+fabricated bundle the old mock fallbacks produced. The P0 patches removed
+those fallbacks: research now fails loudly instead of inventing
+financials, sources, and tickers. These tests assert that fail-loud
+behaviour. Real research is exercised only with real data sources, which
+CI does not have.
+"""
+
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -7,34 +17,37 @@ from pathlib import Path
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
+os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
+
 from agents.research import ResearchAgent, ResearchInput
-from models.research import ResearchBundle
 
 
 class TestResearchAgent(unittest.TestCase):
     """Test suite for ResearchAgent."""
 
-    def test_research_generates_valid_bundle(self):
-        """Verify ResearchAgent produces valid Pydantic v2 ResearchBundle."""
+    def test_private_company_research_fails_loudly(self):
+        """Revolut is private: no public ticker/financials exist, so
+        research must raise instead of mapping it to a public ticker
+        (the old code mapped Revolut -> PYPL) and inventing numbers."""
         agent = ResearchAgent()
-        bundle = agent.run(ResearchInput(topic="How Revolut Makes Money", pillar="finance_to_technical"))
-        
-        self.assertIsInstance(bundle, ResearchBundle)
-        self.assertEqual(bundle.topic, "How Revolut Makes Money")
-        self.assertEqual(bundle.pillar, "finance_to_technical")
-        self.assertGreaterEqual(len(bundle.sources), 10)
-        self.assertGreaterEqual(len(bundle.financials.revenue_by_year), 1)
-        self.assertGreater(bundle.financials.margins.gross, 0.0)
-        self.assertGreater(bundle.research_confidence, 0.8)
+        with self.assertRaises(Exception):
+            agent.run(ResearchInput(topic="How Revolut Makes Money", pillar="finance_to_technical"))
 
-    def test_research_tech_to_financial_pillar(self):
-        """Verify tech_to_financial pillar research generation."""
+    def test_unknown_topic_research_fails_loudly(self):
+        """An unknown topic must raise instead of silently defaulting
+        to ticker SQ (Block/Square) and fabricating a bundle."""
         agent = ResearchAgent()
-        bundle = agent.run(ResearchInput(topic="Solana Pay Architecture", pillar="tech_to_financial"))
-        
-        self.assertEqual(bundle.pillar, "tech_to_financial")
-        self.assertIn("consensus", bundle.technical_context.lower())
-        self.assertGreaterEqual(len(bundle.competitors), 1)
+        with self.assertRaises(Exception):
+            agent.run(ResearchInput(topic="Solana Pay Architecture", pillar="tech_to_financial"))
+
+    def test_ticker_inference_rejects_private_companies(self):
+        """_infer_ticker must return None (not a public ticker) for
+        private companies and unknown topics — no SQ default, no
+        Stripe->SQ / Revolut->PYPL mapping."""
+        agent = ResearchAgent()
+        for topic in ("How Stripe Makes Money", "How Revolut Makes Money", "Solana Pay Architecture"):
+            self.assertIsNone(agent._infer_ticker(topic))
 
 
 if __name__ == "__main__":
