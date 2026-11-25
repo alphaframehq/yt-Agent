@@ -24,15 +24,26 @@ from unittest.mock import patch
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from _sheets_fake import install_fake_sheets
+from tests._sheets_fake import install_fake_sheets
 
 # Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
 # Tests must never touch the real Sheets API — mock the client.
 # (These tests previously relied on ALLOW_IN_MEMORY_CONFIG; the fake
-# replaces that dev-only fallback. Left active for the rest of the run.)
-_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+# replaces that dev-only fallback. Installed in setUpModule; stopped in tearDownModule.)
+_FAKE_SHEETS = None
+_SHEETS_PATCHER = None
 
-from _fixtures import make_test_bundle, make_test_script
+
+def setUpModule():
+    global _FAKE_SHEETS, _SHEETS_PATCHER
+    _FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
+
+def tearDownModule():
+    if _SHEETS_PATCHER is not None:
+        _SHEETS_PATCHER.stop()
+
+from tests._fixtures import make_test_bundle, make_test_script
 from orchestration.graph import PipelineState, TubePilotGraph
 from pipeline import run_pipeline, run_stage
 from workflow.healer import HealingContext

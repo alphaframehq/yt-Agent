@@ -15,15 +15,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
-# Install the in-memory fake Sheets service before importing the bot
+# The in-memory fake Sheets service is installed in setUpModule
 # so every config/queue/video read in these tests hits the fake.
-from _sheets_fake import install_fake_sheets
+from tests._sheets_fake import install_fake_sheets
 
-_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+_FAKE_SHEETS = None
+_SHEETS_PATCHER = None
+
+
+def setUpModule():
+    global _FAKE_SHEETS, _SHEETS_PATCHER
+    _FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
 
 
 def tearDownModule():
-    _SHEETS_PATCHER.stop()
+    if _SHEETS_PATCHER is not None:
+        _SHEETS_PATCHER.stop()
 
 from telegram_bot.bot import check_admin_auth, handle_callback_query, handle_command
 from telegram_bot.codespace import handle_codespace_command
@@ -40,7 +47,7 @@ class TestTelegramBot(unittest.TestCase):
     def setUpClass(cls):
         os.environ["TELEGRAM_ADMIN_ID"] = "12345"
         # CI has no Google Sheets: the fake Sheets service installed
-        # at module import time backs every config/queue/video read.
+        # in setUpModule backs every config/queue/video read.
 
     def test_1_ping_command_returns_health_under_5_seconds(self):
         """Verify /ping returns comprehensive health in < 5 seconds."""

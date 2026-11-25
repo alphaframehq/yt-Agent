@@ -17,15 +17,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
 # The in-memory fake Sheets service backs every Sheets read/write.
-from _sheets_fake import install_fake_sheets
+from tests._sheets_fake import install_fake_sheets
 
-_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+_FAKE_SHEETS = None
+_SHEETS_PATCHER = None
+
+
+def setUpModule():
+    global _FAKE_SHEETS, _SHEETS_PATCHER
+    _FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
 
 
 def tearDownModule():
-    _SHEETS_PATCHER.stop()
+    if _SHEETS_PATCHER is not None:
+        _SHEETS_PATCHER.stop()
 
-from _fixtures import make_test_bundle, make_test_script
+from tests._fixtures import make_test_bundle, make_test_script
 from agents.uploader import UploaderAgent, run_upload
 from db.sheets import (
     cache_research,
