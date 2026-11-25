@@ -1,3 +1,11 @@
+# LOCAL PRODUCTION PATCH — 2026-11-25 — alphaframehq/yt-Agent main c39f42541b8e784dcf41c09583dc57227be07667
+# P0 fixes: #19 /script reads real DB video+audit or fails loudly (no hardcoded 13/13, PASS, 10:20, Stripe default);
+#   #20 /run + run_* honour dispatch_pipeline_run() dispatched flag; #21 rej_/reg_/render_ do the real DB/dispatch
+#   action first, edt_/thm_/shorts_ reply 'not implemented — no action taken'; #22 /videos + /preview say 'No videos
+#   yet' / 'No preview available' (fake yt_priv_1292805d8f removed); #24 check_admin_auth fail-closed when
+#   TELEGRAM_ADMIN_ID unset; #26 run_bot() sys.exit(1) on missing/invalid token or getMe failure.
+#   P1: /ideas labelled curated starter examples, figures unverified; run_* resolves queue IDs via list_topics_queue.
+# Local patch only — do NOT push to GitHub. All other code preserved verbatim from the pinned commit.
 """Telegram Admin Bot Control Plane for TubePilot AI.
 
 Enforces strict security:
@@ -41,6 +49,8 @@ from config_manager import (
 from db.dynamo import (
     clear_topic_queue,
     enqueue_topic,
+    get_latest_verification_log,
+    get_video_record,
     list_recent_videos,
     list_topics_queue,
     update_video_status,
@@ -65,7 +75,10 @@ def check_admin_auth(user_id: int | str) -> bool:
     """Enforce strict admin authorization check."""
     admin_id = get_secret("TELEGRAM_ADMIN_ID") or os.getenv("TELEGRAM_ADMIN_ID")
     if not admin_id:
-        return True
+        # P0 #24: fail closed. No admin configured => nobody is admin.
+        # (Previously this returned True, letting anyone run every command.)
+        logger.error("SECURITY: TELEGRAM_ADMIN_ID is not set — denying all Telegram commands (fail-closed).")
+        return False
     return str(user_id) == str(admin_id)
 
 
@@ -145,37 +158,111 @@ def _handle_run_menu() -> Dict[str, Any]:
 
 
 def _handle_script_command(args: List[str]) -> Dict[str, Any]:
-    """Subcommand handler for /script and fact-check verification inspection."""
+    """Subcommand handler for /script and fact-check verification inspection.
+
+    P0 #19: reads the actual latest video record from DynamoDB (yt_videos)
+    plus its latest stored verification audit (yt_verification_log) and
+    reports ONLY what those records contain. No hardcoded audit, no
+    hardcoded duration/scene count, no default "How Stripe Makes Money"
+    topic. If no matching record/audit exists, says so loudly.
+    """
     branding = get_channel_branding()
     channel_name = branding["channel_name"]
     cta = branding["cta"].get("like_subscribe", "")
 
-    topic = " ".join(args).strip() if args else "How Stripe Makes Money"
+    topic_filter = " ".join(args).strip() if args else ""
+
+    try:
+        vids = [v for v in list_recent_videos(limit=5) if v.get("video_id") != "yt_priv_1292805d8f"]
+    except Exception as e:
+        logger.error(f"/script: could not read video records: {e}")
+        return {"text": f"❌ Could not read video records from DynamoDB: `{e}`", "delete_msg": False}
+
+    if topic_filter:
+        matched = [
+            v for v in vids
+            if topic_filter.lower() in str(v.get("title", "")).lower()
+            or topic_filter.lower() in str(v.get("topic", "")).lower()
+            or topic_filter == str(v.get("video_id", ""))
+        ]
+        if not matched:
+            return {
+                "text": (
+                    f"❌ No script/audit found for `{topic_filter}`.\n\n"
+                    "No video record matching that topic exists in yt_videos, and no "
+                    "verification audit was found. Run `/run <topic>` to produce one first."
+                ),
+                "buttons": [{"text": "⬅️ Back to Menu", "callback_data": "menu_main"}],
+                "delete_msg": False,
+            }
+        video = matched[0]
+    else:
+        if not vids:
+            return {
+                "text": (
+                    "❌ No script/audit found.\n\n"
+                    "No video records exist in yt_videos yet — nothing has been produced, "
+                    "so there is no script or fact-check audit to show. "
+                    "Run `/run <topic>` to produce one first."
+                ),
+                "buttons": [{"text": "⬅️ Back to Menu", "callback_data": "menu_main"}],
+                "delete_msg": False,
+            }
+        video = vids[0]
+
+    video_id = video.get("video_id", "unknown")
+    title = video.get("title") or video.get("topic") or "Untitled"
 
     lines = [
         "📝 *Latest Video Script & Fact-Check Verification Audit*",
         "",
-        f"• *Title:* `How {topic} Works Behind The Scenes (Architecture & P&L)`",
+        f"• *Title:* `{title}`",
+        f"• *Video ID:* `{video_id}`",
         f"• *Channel:* `{channel_name}`",
-        f"• *Content Pillar:* `Finance to Technical (70/30 Rule)`",
-        "• *Target Duration:* `10:20 (13 Longform Scenes + 3 Vertical Shorts)`",
-        "• *3-Second Hook:* \"Every second, billions of dollars move across digital networks through systems invisible to the naked eye...\"",
-        "",
-        "🔍 *7 Deterministic Fact-Check Audit Results (<1ms):*",
-        "✅ 1. Claim Provenance Check: *PASS* (13/13 claims verified against SEC 10-K & P&L sources)",
-        "✅ 2. Financial Metrics Check: *PASS* (Zero ungrounded or fabricated figures)",
-        "✅ 3. Mandatory Disclaimer: *PASS* (Educational software analysis disclaimer verified)",
-        "✅ 4. Investment Advice Prohibition: *PASS* (Zero buy/sell directives)",
-        "✅ 5. Self-Contradiction Analysis: *PASS* (No conflicting numerical assertions)",
-        "✅ 6. Section Completeness: *PASS* (Hook, Architecture, Unit Economics, P&L, Outro)",
-        "✅ 7. SEO Sanity & Timing: *PASS* (Title, 300+ word description, tags verified)",
-        "",
-        f"📣 *CTA Verification:* *PASS* (\"{cta[:45]}...\")",
-        "🎯 *Overall Verification Status:* `PASS (0 Critical, 0 Major Issues)`",
+        f"• *Status:* `{video.get('status', 'unknown')}`",
     ]
+    # Only show duration/cost when the record actually stores them.
+    if video.get("duration") is not None:
+        lines.append(f"• *Duration:* `{video.get('duration')}`")
+    if video.get("cost_usd") is not None:
+        lines.append(f"• *Recorded cost:* `${video.get('cost_usd')} USD`")
+    lines.append("")
+    lines.append("ℹ️ Script text is not stored in yt_videos, so the full script text cannot be shown here.")
+    lines.append("")
+
+    audit = None
+    try:
+        audit = get_latest_verification_log(video_id)
+    except Exception as e:
+        logger.error(f"/script: could not read verification log for {video_id}: {e}")
+
+    if not audit:
+        lines.append(
+            "⚠️ *No verification audit found* for this video in yt_verification_log — "
+            "no PASS/FAIL verdict is available. Do not treat this script as fact-checked."
+        )
+    else:
+        lines.append("🔍 *Latest stored verification audit (yt_verification_log):*")
+        lines.append(f"• *Iteration:* `{audit.get('iteration', 'unknown')}`")
+        lines.append(f"• *Stored verdict:* `{audit.get('overall', 'unknown')}`")
+        lines.append(f"• *Stored confidence:* `{audit.get('confidence', 'unknown')}`")
+        lines.append(f"• *Model recorded:* `{audit.get('model_used', 'unknown')}`")
+        # Surface real counts from the stored report, if it contains them.
+        try:
+            import json as _json
+            report = _json.loads(audit.get("report_json") or "{}")
+            if isinstance(report, dict):
+                for key in ("critical_issues", "major_issues", "critical", "major", "claims_verified", "total_claims"):
+                    if key in report:
+                        lines.append(f"• *{key}:* `{report[key]}`")
+        except Exception:
+            pass
+        lines.append("")
+        lines.append("_Verdict above is exactly what is stored in the audit log; it was not re-verified here._")
+
+    lines.append(f"📣 *CTA on file:* `{cta[:45]}...`" if cta else "📣 *CTA on file:* _none_")
 
     buttons = [
-        {"text": "🚀 Render Video Now", "callback_data": f"run_{topic[:15].lower().replace(' ', '_')}"},
         {"text": "🎬 Watch Preview", "callback_data": "menu_preview"},
         {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
     ]
@@ -187,7 +274,8 @@ def _handle_ideas_command(args: List[str]) -> Dict[str, Any]:
     """Subcommand handler for /ideas and brainstorming."""
     lines = [
         "💡 *Trending Institutional FinTech Video Topics*",
-        "_Engineered for high Click-Through-Rate (CTR) & institutional software engineering audiences:_\n",
+        "_Curated starter examples only — figures in the hooks below (volumes, valuations, margins) are unverified "
+        "and are not live research. Verify any figure before using it in a video._\n",
     ]
 
     buttons = []
@@ -206,11 +294,12 @@ def _handle_ideas_command(args: List[str]) -> Dict[str, Any]:
 
 def _handle_videos_command(args: List[str]) -> Dict[str, Any]:
     """Subcommand handler for /videos."""
-    vids = list_recent_videos(limit=5)
+    # P0 #22: the known fake placeholder ID is never shown as a real video.
+    vids = [v for v in list_recent_videos(limit=5) if v.get("video_id") != "yt_priv_1292805d8f"]
     lines = ["📺 *Recent Production Video History:*", ""]
     if not vids:
-        lines.append("• `yt_priv_1292805d8f`: *How Stripe Makes Money* (10:20, PRIVATE, $0.09 spend)")
-        lines.append("  🔗 https://youtu.be/yt_priv_1292805d8f")
+        lines.append("No videos yet — no production videos found in yt_videos.")
+        lines.append("Use `/run <topic>` to produce your first video.")
     else:
         for v in vids:
             vid_id = v.get("video_id")
@@ -303,6 +392,20 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
         topic = " ".join(args)
         pillar = "tech_to_financial" if "tech" in topic.lower() else "finance_to_technical"
         dispatch_res = dispatch_pipeline_run(topic, pillar=pillar)
+        # P0 #20: only claim a dispatch when dispatch_pipeline_run() says so.
+        if not dispatch_res.get("dispatched"):
+            return {
+                "text": (
+                    f"❌ Dispatch failed: {dispatch_res.get('details', 'unknown error')}\n\n"
+                    f"• Topic: `{topic}`\n• Queue ID: `{dispatch_res.get('topic_id')}`\n\n"
+                    "The topic is queued in DynamoDB, but no GitHub Actions run was started."
+                ),
+                "buttons": [
+                    {"text": "📋 Topic Queue", "callback_data": "menu_queue"},
+                    {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
+                ],
+                "delete_msg": False,
+            }
         return {
             "text": f"🚀 *Pipeline Dispatched!*\n\n• Topic: `{topic}`\n• Queue ID: `{dispatch_res['topic_id']}`\n• Status: {dispatch_res['details']}",
             "buttons": [
@@ -421,19 +524,53 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
 
     # Fast 1-tap run triggers
     elif callback_data.startswith("run_"):
-        raw_topic = callback_data[4:].replace("_", " ").title()
-        if raw_topic == "Stripe":
-            raw_topic = "How Stripe Makes Money"
-        elif raw_topic == "Plaid":
-            raw_topic = "How Plaid Connects Banks"
-        elif raw_topic == "Visa":
-            raw_topic = "Visa vs Mastercard Payment Rails"
-        elif raw_topic == "Nubank":
-            raw_topic = "Nubank Unit Economics & P&L"
+        raw_id = callback_data[4:]
+        # P1 queue-ID bug: callbacks such as run_top_<md5> (emitted by
+        # qidea_ / /topic add "Launch Now" buttons) carry a QUEUE ID, not a
+        # topic name. Resolve it against the queue first; never dispatch
+        # the raw ID as a garbled topic.
+        topic = None
+        pillar = "finance_to_technical"
+        try:
+            queued = [t for t in list_topics_queue() if str(t.get("topic_id")) == raw_id]
+        except Exception as e:
+            logger.error(f"run_ callback: could not read topic queue: {e}")
+            queued = []
+        if queued:
+            topic = queued[0].get("topic")
+            pillar = queued[0].get("pillar") or pillar
+        elif raw_id in ("stripe", "plaid", "visa", "nubank"):
+            topic = {
+                "stripe": "How Stripe Makes Money",
+                "plaid": "How Plaid Connects Banks",
+                "visa": "Visa vs Mastercard Payment Rails",
+                "nubank": "Nubank Unit Economics & P&L",
+            }[raw_id]
+        elif raw_id.startswith("top_"):
+            return {
+                "text": f"❌ Queue ID `{raw_id}` not found — no run dispatched.",
+                "buttons": [{"text": "⬅️ Back to Menu", "callback_data": "menu_main"}],
+            }
+        else:
+            # Legacy topic-slug button (e.g. from an old /script message).
+            topic = raw_id.replace("_", " ").title()
+            pillar = "tech_to_financial" if "tech" in topic.lower() else "finance_to_technical"
 
-        dispatch_res = dispatch_pipeline_run(raw_topic)
+        dispatch_res = dispatch_pipeline_run(topic, pillar=pillar)
+        # P0 #20: only claim a dispatch when dispatch_pipeline_run() says so.
+        if not dispatch_res.get("dispatched"):
+            return {
+                "text": (
+                    f"❌ Dispatch failed: {dispatch_res.get('details', 'unknown error')}\n\n"
+                    f"• Topic: `{topic}`\n• Queue ID: `{dispatch_res.get('topic_id')}`"
+                ),
+                "buttons": [
+                    {"text": "📋 View Queue", "callback_data": "menu_queue"},
+                    {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
+                ],
+            }
         return {
-            "text": f"🚀 *Pipeline Dispatched!*\n\n• Topic: `{raw_topic}`\n• ID: `{dispatch_res['topic_id']}`\n• Status: {dispatch_res['details']}",
+            "text": f"🚀 *Pipeline Dispatched!*\n\n• Topic: `{topic}`\n• ID: `{dispatch_res['topic_id']}`\n• Status: {dispatch_res['details']}",
             "buttons": [
                 {"text": "📋 View Queue", "callback_data": "menu_queue"},
                 {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
@@ -449,18 +586,67 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
         return {"text": f"❌ Could not publish video `{yt_id}`. Please check YouTube API status."}
 
     elif callback_data.startswith("rej_"):
+        # P0 #21: reject only after the real DB update succeeds.
         yt_id = callback_data[4:]
-        return {"text": f"❌ Video `{yt_id}` rejected and archived."}
+        try:
+            rec = get_video_record(yt_id)
+        except Exception as e:
+            return {"text": f"❌ Could not reject video `{yt_id}`: could not read its record ({e}) — no action taken."}
+        if rec is None:
+            return {"text": f"❌ Video `{yt_id}` not found in yt_videos — no action taken."}
+        try:
+            ok = update_video_status(yt_id, "rejected")
+        except Exception as e:
+            return {"text": f"❌ Could not reject video `{yt_id}`: `{e}` — no action taken."}
+        if not ok:
+            return {"text": f"❌ Could not reject video `{yt_id}`: status update failed — no action taken."}
+        return {"text": f"❌ Video `{yt_id}` marked rejected in yt_videos.\n\n_Note: this only updates the DB record; it does not delete the video from YouTube._"}
 
     elif callback_data.startswith("reg_"):
+        # P0 #21: re-enqueue only after the real enqueue succeeds.
         v_id = callback_data[4:]
-        return {"text": f"🔁 Video `{v_id}` re-enqueued for regeneration."}
+        try:
+            rec = get_video_record(v_id)
+        except Exception as e:
+            return {"text": f"❌ Could not re-enqueue video `{v_id}`: could not read its record ({e}) — no action taken."}
+        if rec is None:
+            return {"text": f"❌ Video `{v_id}` not found in yt_videos — no action taken."}
+        topic = rec.get("topic") or rec.get("title")
+        if not topic:
+            return {"text": f"❌ Not implemented — no action taken: video `{v_id}` has no topic/title on its record to re-enqueue."}
+        try:
+            top_id = enqueue_topic(topic, pillar=rec.get("pillar") or "finance_to_technical", priority=10)
+        except Exception as e:
+            return {"text": f"❌ Could not re-enqueue video `{v_id}`: `{e}` — no action taken."}
+        return {"text": f"🔁 Video `{v_id}` re-enqueued for regeneration.\n\n• Topic: `{topic}`\n• Queue ID: `{top_id}`"}
+
+    elif callback_data.startswith("render_"):
+        # P0 #21: /preview offers a Re-Render button; dispatch a real run
+        # for the record's topic and confirm only if dispatch succeeds.
+        v_id = callback_data[7:]
+        try:
+            rec = get_video_record(v_id)
+        except Exception as e:
+            return {"text": f"❌ Could not re-render video `{v_id}`: could not read its record ({e}) — no action taken."}
+        if rec is None:
+            return {"text": f"❌ Video `{v_id}` not found in yt_videos — no action taken."}
+        topic = rec.get("topic") or rec.get("title")
+        if not topic:
+            return {"text": f"❌ Not implemented — no action taken: video `{v_id}` has no topic/title on its record to re-render."}
+        dispatch_res = dispatch_pipeline_run(topic, pillar=rec.get("pillar") or "finance_to_technical")
+        if not dispatch_res.get("dispatched"):
+            return {"text": f"❌ Dispatch failed: {dispatch_res.get('details', 'unknown error')}\n\n• Topic: `{topic}` — no re-render started."}
+        return {"text": f"🔄 Re-render dispatched for `{v_id}`.\n\n• Topic: `{topic}`\n• Queue ID: `{dispatch_res.get('topic_id')}`"}
 
     elif callback_data.startswith("edt_"):
-        return {"text": "✏️ Please send updated title and description in reply."}
+        # P0 #21: no edit workflow is wired in this bot — there is no stored
+        # pending-edit state and no handler for a reply with a new title, so
+        # claiming an edit would be fake. Say so instead of claiming success.
+        return {"text": "❌ Not implemented — no action taken: title/description editing is not wired up in this bot (no edit is stored or applied)."}
 
     elif callback_data.startswith("thm_"):
-        return {"text": "🖼️ Send new custom thumbnail image to replace current visual."}
+        # P0 #21: no thumbnail-replacement workflow is wired in this bot.
+        return {"text": "❌ Not implemented — no action taken: custom thumbnail replacement is not wired up in this bot (no image is stored or applied)."}
 
     elif callback_data.startswith("mdl_"):
         target_mdl = callback_data[4:]
@@ -489,8 +675,9 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
         }
 
     elif callback_data.startswith("shorts_"):
+        # P0 #21: no Shorts generation/scheduling is called from this bot.
         vid = callback_data[7:]
-        return {"text": f"📱 3 vertical Shorts prepared for `{vid}`. Scheduling across TikTok / YouTube Shorts."}
+        return {"text": f"❌ Not implemented — no action taken: no Shorts were prepared or scheduled for `{vid}` (no Shorts workflow is called from this bot)."}
 
     return {"text": "Action processed.", "buttons": [{"text": "⬅️ Back to Menu", "callback_data": "menu_main"}]}
 
@@ -667,7 +854,39 @@ def _handle_preview_command(args: List[str], chat_id: Optional[int | str] = None
                 "delete_msg": False,
             }
 
-    yt_id = args[0] if args and not args[0].startswith("-") and args[0] not in ("shorts", "long", "image") else "yt_priv_1292805d8f"
+    # P0 #22: no fake fallback video. Only a real yt_videos record (or a
+    # user-supplied ID that exists in yt_videos) may be previewed/published.
+    yt_id = None
+    if args and not args[0].startswith("-") and args[0] not in ("shorts", "long", "image", "thumb", "thumbnail", "chart"):
+        candidate = args[0]
+        try:
+            yt_id = candidate if get_video_record(candidate) else None
+        except Exception:
+            yt_id = None
+        if yt_id is None:
+            return {
+                "text": f"🎬 No preview available for `{candidate}` — no such video record found in yt_videos.",
+                "buttons": [
+                    {"text": "🚀 Produce New Video", "callback_data": "menu_run"},
+                    {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
+                ],
+                "delete_msg": False,
+            }
+    else:
+        try:
+            recent = [v for v in list_recent_videos(limit=5) if v.get("video_id") != "yt_priv_1292805d8f"]
+        except Exception:
+            recent = []
+        if not recent:
+            return {
+                "text": "🎬 No preview available — no videos produced yet.\n\nUse `/run <topic>` to produce your first video.",
+                "buttons": [
+                    {"text": "🚀 Produce New Video", "callback_data": "menu_run"},
+                    {"text": "⬅️ Back to Menu", "callback_data": "menu_main"},
+                ],
+                "delete_msg": False,
+            }
+        yt_id = recent[0].get("video_id")
     yt_url = f"https://youtu.be/{yt_id}"
     branding = get_channel_branding()
 
@@ -897,10 +1116,13 @@ def run_bot(max_duration_seconds: Optional[int] = None) -> None:
 
     token = get_secret("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
+        # P0 #26: exit non-zero so the workflow/runner knows startup failed.
         logger.error("TELEGRAM_BOT_TOKEN is not configured. Cannot start Telegram bot.")
-        return
+        sys.exit(1)
 
     admin_id = get_secret("TELEGRAM_ADMIN_ID") or os.getenv("TELEGRAM_ADMIN_ID")
+    if not admin_id:
+        logger.error("TELEGRAM_ADMIN_ID is not set — check_admin_auth() will deny all commands (fail-closed).")
     is_gh_actions = os.getenv("GITHUB_ACTIONS") == "true"
     run_id = os.getenv("GITHUB_RUN_ID", "local")
     logger.info(f"Starting Telegram bot listener (Admin: {admin_id}, GH Actions: {is_gh_actions}, Run: {run_id})")
@@ -917,11 +1139,12 @@ def run_bot(max_duration_seconds: Optional[int] = None) -> None:
                 first_name = me["result"].get("first_name", "")
                 logger.info(f"✅ Bot connected to Telegram as @{username} ({first_name}). Awaiting commands...")
             else:
+                # P0 #26: invalid token / getMe failure must not exit 0.
                 logger.error(f"Failed to authenticate bot: {me}")
-                return
+                sys.exit(1)
         except Exception as e:
             logger.error(f"Network error connecting to Telegram: {e}")
-            return
+            sys.exit(1)
 
         while True:
             if max_duration_seconds and (time.time() - start_time) >= max_duration_seconds:
