@@ -17,6 +17,14 @@ from pathlib import Path
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from _sheets_fake import install_fake_sheets
+
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# Tests must never touch the real Sheets API — mock the client.
+# (These tests previously relied on ALLOW_IN_MEMORY_CONFIG; the fake
+# replaces that dev-only fallback. Left active for the rest of the run.)
+_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
 from agents.research import ResearchAgent, ResearchInput
 
 

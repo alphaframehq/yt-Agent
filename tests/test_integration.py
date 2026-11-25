@@ -16,6 +16,14 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from _sheets_fake import install_fake_sheets
+
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# Tests must never touch the real Sheets API — mock the client.
+# (These tests previously relied on ALLOW_IN_MEMORY_CONFIG; the fake
+# replaces that dev-only fallback. Left active for the rest of the run.)
+_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
 from scripts.notify import send_telegram_notification
 from scripts.notify_failure import notify_pipeline_failure
 from scripts.notify_success import notify_pipeline_success
