@@ -1,4 +1,4 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 (not yet applied upstream).
+# LOCAL PRODUCTION PATCH — 2026-11-25 (applied via PR #1, branch fix/production-mocks)..
 # Fixes P0 #7 (audit list, 25 Nov 2026): _check_investment_advice_semantic()
 # was a stub that always returned pass with no LLM call. It now performs a
 # real LLM semantic check via tools.llm_provider.call_with_fallback() using

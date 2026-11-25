@@ -1,4 +1,4 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 — NOT pushed to GitHub.
+# LOCAL PRODUCTION PATCH — 2026-11-25 — Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # Source: alphaframehq/yt-Agent @ main c39f42541b8e784dcf41c09583dc57227be07667
 # Fixes audit P0 #12 (task slice #13): upload_and_register() now REQUIRES
 # a passing VerificationReport (real score from report.confidence, never
@@ -9,10 +9,10 @@
 # saved. Empty/missing thumbnails warn (no thumbnail) or raise (supplied
 # but missing/empty) instead of being silently recorded as "".
 # BREAKING CHANGE: signature changed — verification_report is a required
-# argument. Callers must be updated (orchestration/graph.py node_finalize
-# currently never calls the uploader at all — audit P0 #16 — it must pass
-# the real run_verification() output when wired up; never fabricate a
-# report). run_upload() changed the same way.
+# argument. Callers are updated: orchestration/graph.py node_finalize
+# now calls the uploader and passes the real VerificationReport from
+# node_verify (raises if missing or not "pass"); never fabricate a
+# report. run_upload() changed the same way.
 """YouTube Uploader and Approval Dispatch Agent for TubePilot AI.
 
 Workflow:

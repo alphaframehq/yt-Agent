@@ -1,4 +1,4 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 (not yet applied upstream).
+# LOCAL PRODUCTION PATCH — 2026-11-25 (applied via PR #1, branch fix/production-mocks)..
 # Fixes P0 #6 (audit list, 25 Nov 2026): ScriptAgent previously never called an
 # LLM and returned 13 fixed template scenes with hardcoded numbers (65%, 68%,
 # $2.5T, <5%, 1.8%, ...) while the SEO text falsely claimed figures were

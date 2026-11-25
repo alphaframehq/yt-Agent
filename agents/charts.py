@@ -1,4 +1,4 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 (not yet applied upstream).
+# LOCAL PRODUCTION PATCH — 2026-11-25 (applied via PR #1, branch fix/production-mocks)..
 # Fixes P0 #10 (audit list, 25 Nov 2026): every chart type plotted hardcoded
 # data (5 of 8 ignored the `data` argument) and any chart error silently
 # returned a content-free stub PNG as success. This patch makes `data` from
