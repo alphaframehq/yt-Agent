@@ -10,6 +10,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 2026-11-25 (PR #1): the production fixes made config/secrets
+    # fail-loud without DynamoDB. CI has no DynamoDB, so tests run in
+    # explicit in-memory dev mode. These flags are test-only; they do
+    # NOT enable any mock/demo fallback in production code.
+    env:
+      ALLOW_IN_MEMORY_CONFIG: "1"
+      ALLOW_IN_MEMORY_SECRETS: "1"
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
