@@ -78,22 +78,31 @@ new one and verify before deleting anything.
    download the client-secret JSON **once** — Google no longer lets you
    re-view/download it later; the secret is shown only masked.
 5. Generate a refresh token with those credentials (OAuth Playground,
-   `https://developers.google.com/oauthplayground`, or the repo's auth
-   flow once implemented) with the two scopes above. Verify it works:
+   `https://developers.google.com/oauthplayground`) with the two scopes
+   above. The repo has no token-*generation* flow — it only *uses* a
+   stored refresh token (PR #3). Verify it works:
    `channels.list mine=true` must return your channel.
 6. Store the three values as GitHub Codespaces secrets (see §7) —
    **never** in a file in the repo, and never in chat.
 
-### 1c. What is NOT done
+### 1c. OAuth2 in code — IMPLEMENTED (PR #3, 25 Nov 2026), live test still required
 
-Real OAuth2 in code (`tools/youtube_api.py::_get_youtube_service`)
-is **not implemented** — it raises `RuntimeError` by design. Storing
-the token does not make uploads work. Implementing it is gap #1 in
-`docs/GAPS.md`: build `google.oauth2.credentials.Credentials` from
-`YT_CLIENT_ID` + `YT_CLIENT_SECRET` + `YT_REFRESH_TOKEN`, refresh as
-needed, pass `credentials=...` (never `developerKey=...`) to
-`build("youtube", "v3", ...)`. An API key is read-only and can never
-authorise writes.
+Real OAuth2 is now implemented in `tools/youtube_api.py::
+_get_youtube_service()` — it builds
+`google.oauth2.credentials.Credentials` from `YT_CLIENT_ID` +
+`YT_CLIENT_SECRET` + `YT_REFRESH_TOKEN` (env only), refreshes the
+access token as needed, and passes `credentials=...` (never
+`developerKey=...`) to `build("youtube", "v3", ...)`. An API key is
+read-only and can never authorise writes. Missing env vars or a
+rejected refresh token (invalid_grant — expired/revoked) raise
+`RuntimeError` loudly; uploads return only the real video ID from the
+API, with the title taken from the script bundle (no invented default).
+
+**This does NOT yet mean uploads are proven.** A real private-upload
+end-to-end test is still REQUIRED before enabling the daily cron
+(§9 step 6): one successful private upload observed, plus one failing
+run observed failing loudly. See `docs/GAPS.md` #1. No video was
+uploaded by PR #3 itself.
 
 ## 2. LLM — Gemini (free, primary) + OpenRouter (fallback). NO Bedrock.
 

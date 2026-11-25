@@ -6,19 +6,26 @@
 
 ## P0 — Must fix before any production run
 
-### 1. YouTube OAuth2 not implemented in code — BLOCKER
+### 1. YouTube OAuth2 — IMPLEMENTED in code (PR #3), live verification still required
 - **File:** `tools/youtube_api.py::_get_youtube_service()`
-- **State:** raises `RuntimeError` by design (PR #1). The old code passed
-  `YT_CLIENT_SECRET` as `developerKey` — wrong; an API key is read-only
-  and can never authorise writes.
+- **State:** implemented 25 Nov 2026 (PR #3, branch `feat/youtube-oauth2`).
+  It builds real `google.oauth2.credentials.Credentials` from
+  `YT_CLIENT_ID` + `YT_CLIENT_SECRET` + `YT_REFRESH_TOKEN`, refreshes
+  the access token, and passes `credentials=...` (never `developerKey`)
+  to `build("youtube", "v3", ...)`. Missing creds or a rejected refresh
+  token raise loudly; `upload_private()` does a real resumable
+  `videos.insert` (private by default) and returns only the real API
+  video ID; the title is required from the script bundle. New tests in
+  `tests/test_youtube_oauth.py` mock the Google client at the test
+  layer only. The old code passed `YT_CLIENT_SECRET` as `developerKey`
+  — wrong; an API key is read-only and can never authorise writes.
 - **What is ready:** GCP project `tubepilot-ai-515805`, YouTube Data API
   v3 enabled, OAuth client "TubePilot Desktop", refresh token obtained
   25 Nov 2026, `channels.list` verified live in the Codespace.
-- **What is missing:** implement OAuth2 — build
-  `google.oauth2.credentials.Credentials` from `YT_CLIENT_ID` +
-  `YT_CLIENT_SECRET` + `YT_REFRESH_TOKEN`, refresh as needed, pass
-  `credentials=...` to `build("youtube", "v3", ...)`. Then a real
-  private-upload test (SETUP.md §9 step 6).
+- **What is still missing — NOT production-ready until done:** a real
+  private-upload end-to-end test (SETUP.md §9 step 6): one successful
+  private upload observed, and one failing run observed failing loudly.
+  No video was uploaded by PR #3 itself.
 - **Token storage: done + verified 25 Nov 2026.** `YT_CLIENT_ID` /
   `YT_CLIENT_SECRET` / `YT_REFRESH_TOKEN` are stored as GitHub
   Codespaces secrets and in the Codespace `.env`; verified three ways
@@ -246,10 +253,11 @@ CI Tests run #18 PASSED.** The steps below start from merged `main`.
 Do not push anything from this folder until you have pulled the merged
 `main` and confirmed the Agnes patch still applies cleanly on top of it.
 
-1. Confirm on `main`: PR #1 merged (`8212f762`), CI run #18 green,
-   `tools/youtube_api.py` still raises (OAuth2 not yet implemented),
-   `agent_chat.py` INTENT 2 still unpatched — those are the known next
-   fixes, not regressions.
+1. Confirm on `main`: PR #1 merged (`8212f762`), PR #2 merged
+   (`d71e15e8`), CI green, `agent_chat.py` INTENT 2 still unpatched —
+   that is a known next fix, not a regression. OAuth2 is implemented
+   on branch `feat/youtube-oauth2` (PR #3, unmerged at the time this
+   was written) — confirm it merges and CI stays green.
 2. Verify the three YT Codespaces secrets exist (fresh GitHub sudo code
    will be needed — the 12:13 IST code has expired). Re-issue the
    refresh token if it is past ~2 Dec 2026.
@@ -264,9 +272,8 @@ Do not push anything from this folder until you have pulled the merged
 4. Verify the Agnes API details in gap #3 against the live docs, fix
    `agnes_ai.py` if the docs differ, then run SETUP.md §9 steps 4–5
    (real image + real video clip, usage page check).
-5. Open a PR, get CI green, merge. Only then start gap #1 (YouTube
-   OAuth2 implementation) on its own branch — OAuth2 is a separate,
-   larger change and must not be bundled into the Agnes PR.
+5. (Done as PR #3, `feat/youtube-oauth2` — OAuth2 was kept on its own
+   branch, not bundled into the Agnes PR.)
 6. After OAuth2 merges: one full end-to-end run, private upload only,
    observed succeeding; and one failing run (e.g. bad topic) observed
    failing loudly. Only then discuss enabling the daily cron.
