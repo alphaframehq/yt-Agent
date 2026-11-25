@@ -6,7 +6,7 @@ routing, uploader gates) without any live API. They are NOT production
 mocks: no production code path reads this module, and no test here claims
 a fixture value is a real-world fact. Production code must still raise
 without real credentials; these fixtures only let the deterministic
-checks run in CI, where no keys, DynamoDB, or YouTube access exist.
+checks run in CI, where no keys, Google Sheets, or YouTube access exist.
 """
 
 import sys

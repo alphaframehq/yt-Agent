@@ -1,14 +1,20 @@
 """Telegram Bot API Key Management Commands for TubePilot AI.
 
-Implements secure hot-swappable key rotation without redeploy:
+Secrets live in GitHub repo settings (Settings -> Secrets and
+variables -> Actions) — the bot can no longer store, rotate, delete,
+export or import them (DynamoDB was removed 25 Nov 2026 and no secret
+is ever written to Google Sheets). The commands below therefore
+validate a value and tell the operator exactly where to set it, and
+still offer live connectivity tests and Gemini pool inspection:
+
 - /keys list                         -> Masked display (first 6 + last 4 chars)
-- /keys set NAME VALUE               -> Save + live test (auto-deletes user message for opsec)
+- /keys set NAME VALUE               -> Validate + GitHub-settings instructions (auto-deletes user message for opsec)
 - /keys test NAME|all                -> Live connectivity test
-- /keys rotate NAME NEWVALUE         -> Archive old key, save new key
-- /keys delete NAME                  -> Remove secret
-- /keys pool NAME add|list|remove    -> Key pool management
-- /keys export                       -> Base64 encrypted backup
-- /keys import B64_DATA              -> Restore from backup
+- /keys rotate NAME NEWVALUE         -> Validate + GitHub-settings instructions
+- /keys delete NAME                  -> GitHub-settings instructions
+- /keys pool NAME add|list|remove    -> Key pool management (add directs to GitHub settings)
+- /keys export                       -> No longer supported (no secrets store)
+- /keys import B64_DATA              -> No longer supported (no secrets store)
 """
 
 from __future__ import annotations
@@ -19,7 +25,6 @@ from loguru import logger
 from tools.secrets import (
     delete_secret,
     export_secrets,
-    get_secret,
     import_secrets,
     list_secrets,
     mask_secret,
@@ -42,15 +47,16 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
         return {
             "text": (
                 "🔐 *TubePilot AI Secrets Manager*\n\n"
+                "Secrets live in GitHub repo settings (Settings → Secrets\n"
+                "and variables → Actions) — the bot cannot store them.\n\n"
                 "Commands:\n"
                 "• `/keys list` - View masked secrets\n"
-                "• `/keys set NAME VALUE` - Set key (auto-deletes msg)\n"
+                "• `/keys set NAME VALUE` - Validate + where to set it (auto-deletes msg)\n"
                 "• `/keys test NAME|all` - Test connectivity\n"
-                "• `/keys rotate NAME NEW_VAL` - Rotate key\n"
+                "• `/keys rotate NAME NEW_VAL` - Validate + where to rotate it\n"
                 "• `/keys pool list|add|rotate` - Manage Gemini multi-key failover pool\n"
-                "• `/keys delete NAME` - Delete secret\n"
-                "• `/keys export` - Backup keys (base64)\n"
-                "• `/keys import <b64>` - Restore backup"
+                "• `/keys delete NAME` - Where to delete it\n"
+                "• `/keys export` / `/keys import` - No longer supported (no secrets store)"
             ),
             "delete_caller_msg": False,
         }
@@ -61,7 +67,7 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
     if subcmd == "list":
         secrets = list_secrets()
         if not secrets:
-            return {"text": "No secrets currently configured in DynamoDB.", "delete_caller_msg": False}
+            return {"text": "No secrets currently configured in GitHub repo secrets.", "delete_caller_msg": False}
 
         lines = ["🔐 *Configured API Secrets (Masked):*"]
         for k, v in sorted(secrets.items()):
@@ -77,14 +83,21 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
 
         try:
             set_secret(name, val)
+            # Unreachable while set_secret always raises (secrets live
+            # in GitHub repo settings) — kept for forward-compat.
             live_ok = test_secret(name)
             status_emoji = "✅ (Live test passed)" if live_ok else "⚠️ (Saved, but test connection failed)"
             return {
                 "text": f"✅ Secret `{name}` stored successfully.\nStatus: {status_emoji}\nMasked: `{mask_secret(val)}`",
-                "delete_caller_msg": True,  # Critical security rule: auto-delete user message containing secret
+                "delete_caller_msg": True,
             }
         except ValueError as ve:
             return {"text": f"❌ Validation Error: {ve}", "delete_caller_msg": True}
+        except RuntimeError as exc:
+            # Secrets are managed in GitHub repo settings — set_secret
+            # explains where. Auto-delete: the user message contains
+            # a secret value.
+            return {"text": f"🔐 {exc}", "delete_caller_msg": True}
 
     # /keys test NAME|all
     elif subcmd == "test":
@@ -115,8 +128,10 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
                 "text": f"🔄 Key `{name}` rotated.\nNew Value: `{mask_secret(new_val)}`",
                 "delete_caller_msg": True,
             }
-        except Exception as e:
-            return {"text": f"❌ Rotation Failed: {e}", "delete_caller_msg": True}
+        except ValueError as ve:
+            return {"text": f"❌ Validation Error: {ve}", "delete_caller_msg": True}
+        except RuntimeError as exc:
+            return {"text": f"🔐 {exc}", "delete_caller_msg": True}
 
     # /keys pool [list|add|rotate]
     elif subcmd == "pool":
@@ -126,7 +141,7 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
             status_list = get_gemini_pool_status()
             if not status_list:
                 return {
-                    "text": "💎 *Gemini API Key Pool:* Empty. Add keys using `/keys pool add gemini <API_KEY>`.",
+                    "text": "💎 *Gemini API Key Pool:* Empty. Add keys as GitHub repo secrets (`GEMINI_KEY`, `GEMINI_KEY_1` … `GEMINI_KEY_20`).",
                     "delete_caller_msg": False,
                 }
             lines = [f"💎 *Gemini API Key Pool ({len(status_list)} keys configured):*"]
@@ -149,11 +164,13 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
                 live_ok = test_secret(assigned_name)
                 test_str = "✅ (Live test passed)" if live_ok else "⚠️ (Saved, connectivity check pending)"
                 return {
-                    "text": f"💎 Added Gemini API key to pool as `{assigned_name}`.\nStatus: {test_str}\nMasked: `{mask_secret(raw_key)}`",
+                    "text": f"💎 Gemini API key is already in the pool as `{assigned_name}`.\nStatus: {test_str}\nMasked: `{mask_secret(raw_key)}`",
                     "delete_caller_msg": True,
                 }
             except ValueError as ve:
                 return {"text": f"❌ Validation Error: {ve}", "delete_caller_msg": True}
+            except RuntimeError as exc:
+                return {"text": f"🔐 {exc}", "delete_caller_msg": True}
 
         elif pool_action == "rotate":
             next_k = rotate_gemini_key()
@@ -175,16 +192,21 @@ def handle_keys_command(args: List[str]) -> Dict[str, Any]:
         if len(args) < 2:
             return {"text": "❌ Usage: `/keys delete KEY_NAME`", "delete_caller_msg": False}
         name = args[1].upper()
-        delete_secret(name)
-        return {"text": f"🗑️ Secret `{name}` removed from DynamoDB.", "delete_caller_msg": False}
+        try:
+            delete_secret(name)
+        except RuntimeError as exc:
+            return {"text": f"🔐 {exc}", "delete_caller_msg": False}
+        return {"text": f"🗑️ Secret `{name}` removed.", "delete_caller_msg": False}
 
     # /keys export
     elif subcmd == "export":
-        b64_backup = export_secrets()
-        return {
-            "text": f"📦 *Encrypted Secrets Backup (Fernet-encrypted):*\n\n`{b64_backup}`\n\n_Store securely._",
-            "delete_caller_msg": False,
-        }
+        try:
+            export_secrets()
+        except RuntimeError as exc:
+            return {"text": f"🔐 {exc}", "delete_caller_msg": False}
+        # Unreachable: export_secrets() always raises (no secrets
+        # store exists to back up).
+        return {"text": "✅ Secrets exported.", "delete_caller_msg": False}
 
     # /keys import <b64>
     elif subcmd == "import":

@@ -11,7 +11,7 @@
 Enforces strict security:
 - Single-Admin authentication: Only TELEGRAM_ADMIN_ID can execute commands.
 - Auto-deletes messages containing raw API keys for chat hygiene.
-- Zero public webhooks: Coordinates with ephemeral runners via DynamoDB message bus.
+- Zero public webhooks: Coordinates with ephemeral runners via Google Sheets message bus.
 
 Features & Modern UI:
 - Interactive Visual Control Deck (/start, /menu, /help)
@@ -46,7 +46,7 @@ from config_manager import (
     set_channel_name,
     set_cta,
 )
-from db.dynamo import (
+from db.sheets import (
     clear_topic_queue,
     enqueue_topic,
     get_latest_verification_log,
@@ -60,7 +60,7 @@ from telegram_bot.codespace import handle_codespace_command
 from telegram_bot.dispatch import dispatch_pipeline_run
 from telegram_bot.health import get_cost_summary, get_pipeline_logs, get_system_ping
 from telegram_bot.keys import handle_keys_command
-from tools.secrets import get_secret
+from tools.secrets import _get_secret_optional, get_secret
 from tools.youtube_api import publish_public
 
 __all__ = [
@@ -73,7 +73,7 @@ __all__ = [
 
 def check_admin_auth(user_id: int | str) -> bool:
     """Enforce strict admin authorization check."""
-    admin_id = get_secret("TELEGRAM_ADMIN_ID") or os.getenv("TELEGRAM_ADMIN_ID")
+    admin_id = _get_secret_optional("TELEGRAM_ADMIN_ID")
     if not admin_id:
         # P0 #24: fail closed. No admin configured => nobody is admin.
         # (Previously this returned True, letting anyone run every command.)
@@ -160,7 +160,7 @@ def _handle_run_menu() -> Dict[str, Any]:
 def _handle_script_command(args: List[str]) -> Dict[str, Any]:
     """Subcommand handler for /script and fact-check verification inspection.
 
-    P0 #19: reads the actual latest video record from DynamoDB (yt_videos)
+    P0 #19: reads the actual latest video record from Google Sheets (yt_videos)
     plus its latest stored verification audit (yt_verification_log) and
     reports ONLY what those records contain. No hardcoded audit, no
     hardcoded duration/scene count, no default "How Stripe Makes Money"
@@ -176,7 +176,7 @@ def _handle_script_command(args: List[str]) -> Dict[str, Any]:
         vids = [v for v in list_recent_videos(limit=5) if v.get("video_id") != "yt_priv_1292805d8f"]
     except Exception as e:
         logger.error(f"/script: could not read video records: {e}")
-        return {"text": f"❌ Could not read video records from DynamoDB: `{e}`", "delete_msg": False}
+        return {"text": f"❌ Could not read video records from Google Sheets: `{e}`", "delete_msg": False}
 
     if topic_filter:
         matched = [
@@ -398,7 +398,7 @@ def handle_command(user_id: int | str, command: str, args: List[str]) -> Dict[st
                 "text": (
                     f"❌ Dispatch failed: {dispatch_res.get('details', 'unknown error')}\n\n"
                     f"• Topic: `{topic}`\n• Queue ID: `{dispatch_res.get('topic_id')}`\n\n"
-                    "The topic is queued in DynamoDB, but no GitHub Actions run was started."
+                    "The topic is queued in Google Sheets, but no GitHub Actions run was started."
                 ),
                 "buttons": [
                     {"text": "📋 Topic Queue", "callback_data": "menu_queue"},
@@ -1069,7 +1069,7 @@ def _handle_cta_command(args: List[str]) -> Dict[str, Any]:
 
 def _retrigger_github_actions_bot() -> bool:
     """Dispatches the next GitHub Actions bot runner workflow before runner timeout."""
-    gh_pat = get_secret("GH_PAT") or os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
+    gh_pat = _get_secret_optional("GH_PAT") or os.getenv("GITHUB_TOKEN")
     full_repo = os.getenv("GITHUB_REPOSITORY", "")
     if "/" in full_repo:
         owner, repo = full_repo.split("/", 1)
@@ -1114,13 +1114,14 @@ def run_bot(max_duration_seconds: Optional[int] = None) -> None:
     except ImportError:
         pass
 
-    token = get_secret("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
+    try:
+        token = get_secret("TELEGRAM_BOT_TOKEN")
+    except RuntimeError:
         # P0 #26: exit non-zero so the workflow/runner knows startup failed.
         logger.error("TELEGRAM_BOT_TOKEN is not configured. Cannot start Telegram bot.")
         sys.exit(1)
 
-    admin_id = get_secret("TELEGRAM_ADMIN_ID") or os.getenv("TELEGRAM_ADMIN_ID")
+    admin_id = _get_secret_optional("TELEGRAM_ADMIN_ID")
     if not admin_id:
         logger.error("TELEGRAM_ADMIN_ID is not set — check_admin_auth() will deny all commands (fail-closed).")
     is_gh_actions = os.getenv("GITHUB_ACTIONS") == "true"
