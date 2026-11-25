@@ -5,7 +5,7 @@
 # the old hardcoded 1.0), refuses on a fail verdict, rejects files below
 # a minimum size/duration or failing an ffprobe probe, and does NOT purge
 # local media until the YouTube copy is verified via videos.list
-# (tools.youtube_api.verify_video_exists) AND the DynamoDB record is
+# (tools.youtube_api.verify_video_exists) AND the Google Sheets record is
 # saved. Empty/missing thumbnails warn (no thumbnail) or raise (supplied
 # but missing/empty) instead of being silently recorded as "".
 # BREAKING CHANGE: signature changed — verification_report is a required
@@ -21,7 +21,7 @@ Workflow:
 3. Upload video to YouTube with privacyStatus="private"
 4. Verify the YouTube copy exists before touching local files
 5. Attach branded thumbnail
-6. Record permanent metadata into DynamoDB yt_videos table
+6. Record permanent metadata into Google Sheets yt_videos tab
 7. Only then execute ephemeral purge: delete local video and thumbnail files
 8. Prepare Telegram approval notification payload with 5 action buttons:
    [✅ Publish] [❌ Reject] [🔁 Regenerate] [✏️ Edit] [🖼️ Thumbnail]
@@ -37,7 +37,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from db.dynamo import save_video_record
+from db.sheets import save_video_record
 from models.script import VideoScript
 from models.verification import VerificationReport
 from storage.ephemeral import purge_local_media
@@ -57,7 +57,7 @@ MIN_DURATION_SEC = 1.0
 
 
 class UploadResult(BaseModel):
-    """Result of YouTube private upload and DynamoDB registration."""
+    """Result of YouTube private upload and Google Sheets registration."""
     video_id: str
     yt_video_id: str
     yt_url: str
@@ -107,7 +107,7 @@ def _probe_duration_sec(video_path: Path) -> float:
 
 
 class UploaderAgent:
-    """Manages secure private video publishing, DynamoDB persistence, and local disk wiping."""
+    """Manages secure private video publishing, Google Sheets persistence, and local disk wiping."""
 
     def __init__(self):
         pass
@@ -120,7 +120,7 @@ class UploaderAgent:
         verification_report: VerificationReport,
         cost_usd: float = 0.0,
     ) -> UploadResult:
-        """Upload video privately, record in DynamoDB, purge local files, and return approval payload.
+        """Upload video privately, record in Google Sheets, purge local files, and return approval payload.
 
         Args:
             verification_report: REQUIRED — the real VerificationReport
@@ -133,7 +133,7 @@ class UploaderAgent:
                 this with a fabricated report or with None.
 
         Local files are purged ONLY after the YouTube copy has been
-        verified (videos.list) AND the DynamoDB record is saved. Any
+        verified (videos.list) AND the Google Sheets record is saved. Any
         failure before that point raises and leaves local files intact.
         """
         # 0. Verification gate — fail verdicts never reach YouTube.
@@ -208,7 +208,7 @@ class UploaderAgent:
             )
         logger.info(f"YouTube copy verified for video {yt_video_id}.")
 
-        # 2. Save metadata to DynamoDB yt_videos
+        # 2. Save metadata to Google Sheets yt_videos
         video_record = {
             "pillar": script.pillar,
             "topic": script.seo.title,

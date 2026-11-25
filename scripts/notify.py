@@ -22,7 +22,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from tools.secrets import get_secret
+from tools.secrets import _get_secret_optional
 
 __all__ = [
     "send_telegram_notification",
@@ -49,8 +49,8 @@ def send_telegram_notification(
     Returns:
         True if sent successfully, False otherwise.
     """
-    token = get_secret("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = get_secret("TELEGRAM_ADMIN_ID") or os.environ.get("TELEGRAM_ADMIN_ID")
+    token = _get_secret_optional("TELEGRAM_BOT_TOKEN")
+    chat_id = _get_secret_optional("TELEGRAM_ADMIN_ID")
 
     if not token or not chat_id:
         logger.warning("Telegram credentials not configured. Notification skipped.")
@@ -139,8 +139,8 @@ def send_telegram_video(
     Returns:
         True if video was uploaded and accepted by Telegram Bot API, False otherwise.
     """
-    token = get_secret("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
-    target_chat = chat_id or get_secret("TELEGRAM_ADMIN_ID") or os.environ.get("TELEGRAM_ADMIN_ID")
+    token = _get_secret_optional("TELEGRAM_BOT_TOKEN")
+    target_chat = chat_id or _get_secret_optional("TELEGRAM_ADMIN_ID")
 
     if not token or not target_chat:
         logger.warning("Telegram credentials not configured. Video send skipped.")
@@ -196,8 +196,8 @@ def send_telegram_photo(
     Returns:
         True if uploaded successfully, False otherwise.
     """
-    token = get_secret("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
-    target_chat = chat_id or get_secret("TELEGRAM_ADMIN_ID") or os.environ.get("TELEGRAM_ADMIN_ID")
+    token = _get_secret_optional("TELEGRAM_BOT_TOKEN")
+    target_chat = chat_id or _get_secret_optional("TELEGRAM_ADMIN_ID")
 
     if not token or not target_chat:
         return False
