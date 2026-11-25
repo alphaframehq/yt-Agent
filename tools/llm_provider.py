@@ -1,3 +1,11 @@
+# PRODUCTION PATCH (local only, 2026-11-25) — yt-Agent audit P0 #1.
+# _call_gemini() now RAISES when no GEMINI_KEY is configured, instead of
+# returning a fake "{}" success that silently short-circuited
+# call_with_fallback(). _call_openrouter() raise behaviour is unchanged.
+# _call_bedrock(): only its misleading "Returning fallback response" log line
+# was fixed (it already re-raised); behaviour unchanged.
+# Source: alphaframehq/yt-Agent @ c39f42541b8e784dcf41c09583dc57227be07667.
+# NOT pushed to GitHub. No secrets in this file — env-var placeholders only.
 """Unified LLM Provider abstraction for TubePilot AI.
 
 Supports Bedrock (Claude), Gemini (2.0/2.5 Flash), and OpenRouter (:free).
@@ -130,13 +138,11 @@ class LLMProvider:
         """Call Google Gemini API with automatic key pool failover on rate-limits (429) or quota errors."""
         keys = get_gemini_pool_keys()
         if not keys:
-            # Fallback mock for testing/offline
-            logger.warning("No GEMINI_KEY configured. Returning fallback mock response.")
-            return LLMResponse(
-                content="{}",
-                provider="gemini",
-                model=self.model,
-            )
+            # PRODUCTION PATCH (P0 #1): raise instead of returning a mock "{}".
+            # A fake success here made call_with_fallback() never try the next
+            # provider, so the whole pipeline ran on an empty LLM response.
+            logger.error("No GEMINI_KEY configured. Raising instead of returning a mock response.")
+            raise ValueError("GEMINI_KEY is required for Gemini provider (set GEMINI_KEY or GEMINI_KEY_POOL)")
 
         headers = {"Content-Type": "application/json"}
         payload: Dict[str, Any] = {
@@ -249,7 +255,9 @@ class LLMProvider:
                 model=self.model,
             )
         except Exception as e:
-            logger.warning(f"Bedrock invocation failed ({e}). Returning fallback response if testing.")
+            # PRODUCTION PATCH (P0 #1): fixed the misleading log line only.
+            # This method already re-raised; it never returned a fallback.
+            logger.warning(f"Bedrock invocation failed ({e}). Raising.")
             raise
 
     def _call_openrouter(
