@@ -1,4 +1,4 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 — NOT pushed to GitHub.
+# LOCAL PRODUCTION PATCH — 2026-11-25 — Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # Source: alphaframehq/yt-Agent @ main c39f42541b8e784dcf41c09583dc57227be07667
 # Fixes audit P0 #8: synthesize_speech() now RAISES on any Polly failure
 # (missing/invalid AWS keys, boto3 missing, network, Polly error, including

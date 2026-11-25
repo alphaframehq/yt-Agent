@@ -13,7 +13,7 @@
 # EDGAR + TinyFish results are now wired in where trivially clear (filing
 # index source + article sources/context); see P1 TODO comments in run().
 # Source: alphaframehq/yt-Agent @ c39f42541b8e784dcf41c09583dc57227be07667.
-# NOT pushed to GitHub. No secrets in this file.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25. No secrets in this file.
 """Agent 1: Research Agent for TubePilot AI.
 
 Gathers structured, verifiable data with traceable sources across:

@@ -5,7 +5,7 @@
 # _call_bedrock(): only its misleading "Returning fallback response" log line
 # was fixed (it already re-raised); behaviour unchanged.
 # Source: alphaframehq/yt-Agent @ c39f42541b8e784dcf41c09583dc57227be07667.
-# NOT pushed to GitHub. No secrets in this file — env-var placeholders only.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25. No secrets in this file — env-var placeholders only.
 """Unified LLM Provider abstraction for TubePilot AI.
 
 Supports Bedrock (Claude), Gemini (2.0/2.5 Flash), and OpenRouter (:free).

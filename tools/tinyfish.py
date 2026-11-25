@@ -8,7 +8,7 @@
 # get_topic_summary() is unchanged in structure — it now propagates the raise
 # instead of citing fabricated articles.
 # Source: alphaframehq/yt-Agent @ c39f42541b8e784dcf41c09583dc57227be07667.
-# NOT pushed to GitHub. No secrets in this file — env-var placeholder only.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25. No secrets in this file — env-var placeholder only.
 """TinyFish and web intelligence tool for TubePilot AI.
 
 Gathers recent fintech trends, architecture deep-dives, breaking news,

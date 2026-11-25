@@ -1,7 +1,7 @@
 # LOCAL PRODUCTION PATCH — 2026-11-25
 # Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — tools/secrets.py
 # Fixes: P0 audit #25 (region) + P1 #11 (task #27 partial): DynamoDB failure raises in production; in-memory-only storage only with explicit ALLOW_IN_MEMORY_SECRETS=1 (default off); get_secret raises on decrypt failure when a stored token exists; test_secret() returns False for untested providers instead of True. Fernet encryption unchanged.
-# Do NOT push to GitHub from here; apply to the repo manually after review.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # No secrets in this file — env placeholders / env-var names only.
 
 """
