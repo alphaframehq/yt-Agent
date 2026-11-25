@@ -1,4 +1,4 @@
-"""Unit tests for Phase 6: Upload, DynamoDB, and Ephemeral Storage.
+"""Unit tests for Phase 6: Upload, Google Sheets, and Ephemeral Storage.
 
 2026-11-25 rewrite: the old setUpClass called run_research()/run_script()
 with no credentials and relied on the production mock/demo fallbacks to
@@ -15,12 +15,10 @@ from pathlib import Path
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
-os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
-
 from _fixtures import make_test_bundle, make_test_script
+from _sheets_fake import install_fake_sheets
 from agents.uploader import UploaderAgent, run_upload
-from db.dynamo import (
+from db.sheets import (
     cache_research,
     enqueue_topic,
     get_bot_requests,
@@ -34,7 +32,7 @@ from db.dynamo import (
     update_video_status,
     write_bot_request,
 )
-from db.setup_dynamo import setup_all_tables
+from db.setup_sheets import setup_all_sheets
 from models.verification import CheckResult, VerificationReport
 from storage.ephemeral import EphemeralWorkspace, purge_local_media, startup_orphan_sweep
 
@@ -52,22 +50,39 @@ def _fail_report():
 
 
 class TestStorageAndUploader(unittest.TestCase):
-    """Test suite covering DynamoDB persistence, ephemeral wipe, and YouTube private upload."""
+    """Test suite covering Google Sheets persistence, ephemeral wipe, and YouTube private upload."""
 
     @classmethod
     def setUpClass(cls):
         cls.bundle = make_test_bundle()
         cls.script = make_test_script(cls.bundle)
 
-    def test_1_dynamo_table_setup_fails_loudly_without_aws(self):
-        """setup_all_tables() provisions real DynamoDB tables. In CI
-        there are no AWS credentials, so it must raise RuntimeError
+
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# The in-memory fake Sheets service backs every Sheets read/write.
+_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
+
+def tearDownModule():
+    _SHEETS_PATCHER.stop()
+
+    def test_1_sheets_setup_fails_loudly_without_credentials(self):
+        """setup_all_sheets() provisions real Google Sheets tabs. In CI
+        there are no Sheets credentials, so it must raise RuntimeError
         instead of reporting success while creating nothing (the old
         test asserted a fake success dict)."""
-        with self.assertRaises(RuntimeError):
-            setup_all_tables()
+        saved_id = os.environ.pop("GOOGLE_SHEETS_ID", None)
+        saved_json = os.environ.pop("GOOGLE_SERVICE_ACCOUNT_JSON", None)
+        try:
+            with self.assertRaises(RuntimeError):
+                setup_all_sheets()
+        finally:
+            if saved_id is not None:
+                os.environ["GOOGLE_SHEETS_ID"] = saved_id
+            if saved_json is not None:
+                os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = saved_json
 
-    def test_2_dynamo_video_record_crud(self):
+    def test_2_sheets_video_record_crud(self):
         """Verify save, get, and update status on yt_videos."""
         v_data = {
             "title": "Test Video Title",
@@ -166,10 +181,10 @@ class TestStorageAndUploader(unittest.TestCase):
         """A verification log entry with no overall/confidence must
         record 'not_run' / 0.0, never a default PASS / 1.0."""
         log_verification("vid_test_default", 1, {})
-        # The in-memory fallback store is the only store in CI; read
-        # the record back through the module's store if present.
-        from db.dynamo import _IN_MEMORY_STORE
-        rec = _IN_MEMORY_STORE["yt_verification_log"].get("vid_test_default#1")
+        # The fake Sheets service is the only store in CI; read the
+        # record back through the public getter.
+        from db.sheets import get_latest_verification_log
+        rec = get_latest_verification_log("vid_test_default")
         self.assertIsNotNone(rec)
         self.assertEqual(rec["overall"], "not_run")
         self.assertEqual(rec["confidence"], 0.0)

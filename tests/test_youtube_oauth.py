@@ -30,9 +30,6 @@ from unittest import mock
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
-os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
-
 import tools.youtube_api as yt_api
 from tools.youtube_api import (
     delete_video,

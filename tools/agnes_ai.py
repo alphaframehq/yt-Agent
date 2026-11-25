@@ -55,9 +55,12 @@ import httpx
 from loguru import logger
 
 try:
-    from tools.secrets import get_secret
+    from tools.secrets import _get_secret_optional, get_secret
 except Exception:  # pragma: no cover - standalone / test import
     def get_secret(name: str) -> Optional[str]:  # type: ignore
+        return os.environ.get(name) or None
+
+    def _get_secret_optional(name: str) -> Optional[str]:  # type: ignore
         return os.environ.get(name) or None
 
 __all__ = [
@@ -91,18 +94,18 @@ _ASPECT_TO_SIZE = {
 
 def _base_url() -> str:
     """Agnes base URL, explicit env/secret first, documented default last."""
-    url = get_secret("AGNES_BASE_URL") or os.environ.get("AGNES_BASE_URL")
+    url = _get_secret_optional("AGNES_BASE_URL")
     return (url or DEFAULT_BASE_URL).rstrip("/")
 
 
 def _api_key() -> str:
     """Bearer key. Raises if missing — never proceed without auth."""
-    key = get_secret("AGNES_API_KEY") or os.environ.get("AGNES_API_KEY")
+    key = _get_secret_optional("AGNES_API_KEY")
     if not key:
         raise ValueError(
             "AGNES_API_KEY not set: store the Agnes key (named 'mus' in "
-            "the Agnes account) as a Codespaces secret / in the secrets "
-            "store. See setup-guide/SETUP.md §5c. No image/video call "
+            "the Agnes account) as a GitHub repo secret (Settings -> "
+            "Secrets and variables -> Actions). No image/video call "
             "is attempted without it."
         )
     return key
