@@ -16,18 +16,34 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from tests._sheets_fake import install_fake_sheets
+
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# Tests must never touch the real Sheets API — mock the client.
+# (These tests previously relied on ALLOW_IN_MEMORY_CONFIG; the fake
+# replaces that dev-only fallback. Installed in setUpModule; stopped in tearDownModule.)
+_FAKE_SHEETS = None
+_SHEETS_PATCHER = None
+
+
+def setUpModule():
+    global _FAKE_SHEETS, _SHEETS_PATCHER
+    _FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
+
+def tearDownModule():
+    if _SHEETS_PATCHER is not None:
+        _SHEETS_PATCHER.stop()
+
 from scripts.notify import send_telegram_notification
 from scripts.notify_failure import notify_pipeline_failure
 from scripts.notify_success import notify_pipeline_success
 from scripts.dev_run import main as dev_run_main, _is_in_codespace, _stop_current_codespace
-from tools.secrets import set_secret
 
 
 class TestSystemIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["MASTER_SECRET"] = "integration_test_master_secret_tube_pilot_9999"
-        os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
         os.environ["TELEGRAM_BOT_TOKEN"] = "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
         os.environ["TELEGRAM_ADMIN_ID"] = "987654321"
 

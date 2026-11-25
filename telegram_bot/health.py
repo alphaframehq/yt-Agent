@@ -20,8 +20,8 @@ from typing import Any, Dict, List
 from loguru import logger
 
 from config_manager import get_config
-from db.dynamo import get_video_record, list_topics_queue
-from tools.secrets import get_secret
+from db.sheets import get_video_record, list_topics_queue
+from tools.secrets import _get_secret_optional
 
 __all__ = [
     "get_system_ping",
@@ -44,7 +44,7 @@ def get_system_ping() -> Dict[str, Any]:
     is_paused = bool(get_config("paused"))
     active_verify = get_config("active_models.verify") or "bedrock/claude-3-5-haiku"
 
-    # 2. Topic queue depth (real DynamoDB scan via list_topics_queue)
+    # 2. Topic queue depth (real Google Sheets read via list_topics_queue)
     try:
         topics_pending = len(list_topics_queue(status="pending"))
         topics_running = len(list_topics_queue(status="running"))
@@ -56,7 +56,7 @@ def get_system_ping() -> Dict[str, Any]:
 
     # 3. Pending approvals — real count from yt_videos, never a baseline.
     try:
-        from db.dynamo import list_recent_videos as _list_recent_videos
+        from db.sheets import list_recent_videos as _list_recent_videos
         _recent = _list_recent_videos(limit=100)
         pending_approvals = sum(1 for v in _recent if v.get("status") == "pending_approval")
         recent_for_spend = _recent
@@ -65,15 +65,15 @@ def get_system_ping() -> Dict[str, Any]:
         pending_approvals = None
         recent_for_spend = []
 
-    # 4. DynamoDB — no live ping is made here, so do not claim "Connected".
-    dynamo_status = "unknown/not checked (no live DynamoDB ping made; queue/video reads above are the only DynamoDB access attempted)"
+    # 4. Google Sheets — no live ping is made here, so do not claim "Connected".
+    sheets_status = "unknown/not checked (no live Google Sheets ping made; queue/video reads above are the only Google Sheets access attempted)"
 
     # 5. LLM provider keys — key presence only; never "Ready" without a call.
-    gemini_key = get_secret("GEMINI_KEY")
+    gemini_key = _get_secret_optional("GEMINI_KEY")
     gemini_status = "key set (not pinged)" if gemini_key else "⚠️ Unset"
-    openrouter_key = get_secret("OPENROUTER_KEY")
+    openrouter_key = _get_secret_optional("OPENROUTER_KEY")
     openrouter_status = "key set (not pinged)" if openrouter_key else "⚠️ Unset"
-    bedrock_status = "key set (not pinged)" if get_secret("AWS_ACCESS_KEY_ID") else "⚠️ Unset"
+    bedrock_status = "key set (not pinged)" if _get_secret_optional("AWS_ACCESS_KEY_ID") else "⚠️ Unset"
 
     # 6. Spend — sum of cost_usd actually stored on recent video records.
     #    This is NOT a verified month-to-date total (no spend ledger exists).
@@ -91,7 +91,7 @@ def get_system_ping() -> Dict[str, Any]:
             gh_status = f"reachable (HTTP {resp.status_code})" if resp.status_code == 200 else f"HTTP {resp.status_code}"
         except Exception as e:
             gh_status = f"unreachable: {e}"
-        gh_pat = get_secret("GH_PAT") or os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
+        gh_pat = _get_secret_optional("GH_PAT") or os.getenv("GITHUB_TOKEN")
         full_repo = os.getenv("GITHUB_REPOSITORY", "")
         if gh_pat and "/" in full_repo:
             owner, repo = full_repo.split("/", 1)
@@ -132,7 +132,7 @@ def get_system_ping() -> Dict[str, Any]:
         f"• *Host Environment:* `{host_env}`\n"
         f"• *Scheduler Status:* {'⏸ PAUSED' if is_paused else '▶️ ACTIVE'}\n"
         f"• *Active Verify Model:* `{active_verify}`\n"
-        f"• *DynamoDB:* {dynamo_status}\n"
+        f"• *Google Sheets:* {sheets_status}\n"
         f"• *Queue Depth:* {_u(topics_pending)} pending, {_u(topics_running)} running\n"
         f"• *Pending Approvals:* {_u(pending_approvals)} video(s)\n"
         f"• *Recorded Spend (sum of cost_usd on last {len(recent_for_spend)} video records):* "
@@ -178,7 +178,7 @@ def get_cost_summary(video_id: str = "") -> str:
     budget = get_config("budget_ai_per_video")
     budget_line = f"• Current Video Budget Cap: `${budget} USD`" if budget is not None else "• Current Video Budget Cap: unknown/not checked"
     try:
-        from db.dynamo import list_recent_videos as _list_recent_videos
+        from db.sheets import list_recent_videos as _list_recent_videos
         _recent = _list_recent_videos(limit=100)
         _costs = [v.get("cost_usd") for v in _recent if isinstance(v.get("cost_usd"), (int, float))]
         partial = f"${round(sum(_costs), 3):.3f} USD (sum of cost_usd on last {len(_recent)} video records)" if _costs else "unknown/not checked (no cost_usd recorded on recent video records)"
@@ -192,7 +192,7 @@ def get_cost_summary(video_id: str = "") -> str:
         "• Average Cost per Video: unknown/not checked (no verified cost ledger)\n"
         "• Month-to-date Spend: unknown/not checked (no month-to-date spend ledger is queried)\n"
         "• YouTube Storage Cost: unknown/not checked\n"
-        "• AWS DynamoDB Cost: unknown/not checked"
+        "• Google Sheets Cost: unknown/not checked (no billing is tracked for the sheet)"
     )
 
 

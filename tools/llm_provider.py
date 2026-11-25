@@ -28,7 +28,7 @@ from tenacity import (
 )
 
 from tools.secrets import (
-    get_secret,
+    _get_secret_optional,
     get_gemini_pool_keys,
     mark_gemini_key_failed,
     mask_secret,
@@ -213,8 +213,8 @@ class LLMProvider:
         temperature: float = 0.2,
     ) -> LLMResponse:
         """Call AWS Bedrock Claude models via boto3 bedrock-runtime."""
-        aws_key = get_secret("AWS_ACCESS_KEY_ID")
-        aws_secret = get_secret("AWS_SECRET_ACCESS_KEY")
+        aws_key = _get_secret_optional("AWS_ACCESS_KEY_ID")
+        aws_secret = _get_secret_optional("AWS_SECRET_ACCESS_KEY")
 
         try:
             import boto3
@@ -268,7 +268,7 @@ class LLMProvider:
         temperature: float = 0.2,
     ) -> LLMResponse:
         """Call OpenRouter API."""
-        api_key = get_secret("OPENROUTER_KEY")
+        api_key = _get_secret_optional("OPENROUTER_KEY")
         if not api_key:
             logger.warning("OPENROUTER_KEY not configured. Raising error.")
             raise ValueError("OPENROUTER_KEY is required for OpenRouter provider")

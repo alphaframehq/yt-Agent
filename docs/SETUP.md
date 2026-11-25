@@ -23,7 +23,8 @@
   (here: `alphaframehq@gmail.com`, channel `UCs3Pxla45RH-V0-JcHxp42A` —
   already verified 25 Nov 2026).
 - A Telegram bot token + your Telegram user ID (admin).
-- An AWS account with DynamoDB + Polly access in `us-east-2`.
+- An AWS account with Polly access in `us-east-2` (optional — only for Polly TTS; DynamoDB is gone).
+- A Google service account + spreadsheet for all non-secret data (see §3).
 - Gemini AI Studio key (free) and an OpenRouter key.
 - An Agnes AI account (Google sign-in works) — key named `mus` already
   exists, created 25 Nov 2026.
@@ -120,37 +121,52 @@ uploaded by PR #4 itself.
    old `.env.example` said "Bedrock skipped", and config used Gemini.
    User decision 25 Nov 2026: **Gemini + OpenRouter only.** If you see
    a Bedrock model name anywhere in config (`claude-3-5-haiku` was a
-   default in `db/dynamo.py`, now patched to `"unknown"`), treat it as a
+   stale default in the removed `db/dynamo.py`), treat it as a
    stale default, not a requirement.
 
 Verify: run the LLM path with no key set — it must **raise**, not return
 an empty script. Then set the key and confirm a real structured call
 succeeds (see §9 smoke test).
 
-## 3. AWS — DynamoDB (us-east-2) + Polly
+## 3. Google Sheets (data store) + AWS Polly (optional TTS)
 
-1. Region: **`AWS_REGION=us-east-2`** in every env, workflow file and
-   script. Do not use `us-east-1` (old `setup_dynamo.py`) or
-   `ap-southeast-2` (old `.env.example`).
-2. Create an IAM user/role with `dynamodb:*` on the 7 `yt_*` tables and
-   `polly:SynthesizeSpeech`. Store `AWS_ACCESS_KEY_ID` /
-   `AWS_SECRET_ACCESS_KEY` as Codespaces secrets.
-3. Provision the tables (patched `db/setup_dynamo.py` now raises if the
-   region is missing or a table is missing after provisioning, and
-   verifies all 7 tables exist):
+DynamoDB was **removed 25 Nov 2026** — all non-secret data (videos,
+research cache, verification logs, pipeline runs, config, bot
+requests, topics queue, YouTube insights) now lives in **one Google
+Spreadsheet, one tab per data set** (`db/sheets.py`, 8 tabs). Secrets
+are **never** stored in the sheet — they stay in GitHub repo secrets
+(env vars). **Live DynamoDB data could not be migrated** (no AWS
+credentials exist anywhere, so live DynamoDB is unreachable and no
+backups exist) — the Sheets store starts fresh.
+
+1. In GCP project **TubePilot AI** (`tubepilot-ai-515805`): APIs &
+   Services → Library → search "Google Sheets API" → Enable.
+2. APIs & Services → Credentials → Create Credentials → Service
+   account → name it e.g. `tubepilot-sheets`. No project role is
+   needed (the spreadsheet share below grants access).
+3. On the new service account: Keys → Add key → JSON → download the
+   key file **once** — Google will not re-show it.
+4. Create a Google Spreadsheet (any name, e.g. "TubePilot AI Data")
+   and share it with the service-account email as **Editor**.
+5. Store two GitHub repo secrets (Settings → Secrets and variables →
+   Actions): `GOOGLE_SHEETS_ID` (the ID from the spreadsheet URL)
+   and `GOOGLE_SERVICE_ACCOUNT_JSON` (the raw JSON key contents, or
+   a path to the `.json` key file in the runner env).
+6. Provision the tabs (creates all 8 tabs with headers if missing;
+   raises if the sheet is unreachable or headers mismatch):
    ```bash
-   export AWS_REGION=us-east-2
-   python -m db.setup_dynamo
+   python -m db.setup_sheets
    ```
-   Tables (7, `yt_*` prefix — confirm exact names in `db/setup_dynamo.py`
-   before running; the audit records 7 tables, names were not re-listed
-   here): videos, verification logs, topics queue, config (`yt_config`),
-   secrets, and two further `yt_*` tables. If `_verify_tables_exist()`
-   raises, do not proceed — the runtime will look in the wrong region
-   otherwise.
-4. Polly: no extra setup beyond the IAM permission. The patched
-   `tools/polly.py` raises on any Polly failure — a silent 1-sec MP3 is
-   no longer produced. `ALLOW_DEMO_MODE` must stay off in production.
+   Tabs (8): `yt_videos`, `yt_research_cache`, `yt_verification_log`,
+   `yt_pipeline_runs`, `yt_config`, `yt_bot_requests`,
+   `yt_topics_queue`, `yt_insights`.
+7. Region: **`AWS_REGION=us-east-2`** in every env, workflow file and
+   script (Polly region). Do not use `us-east-1` or `ap-southeast-2`.
+8. Polly (optional, only if you want AWS Polly TTS): create an IAM
+   user/role with `polly:SynthesizeSpeech` only and store
+   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` as repo secrets.
+   `tools/polly.py` raises on any Polly failure — a silent 1-sec MP3
+   is no longer produced. `ALLOW_DEMO_MODE` must stay off in production.
 
 ## 4. Telegram bot
 
@@ -239,8 +255,7 @@ Store it as the Codespaces secret `AGNES_API_KEY` (and
 GitHub UI, straight from the Agnes API-keys page
 (https://platform.agnes-ai.com/settings/apiKeys), without pasting the
 value anywhere else. The client reads it via `tools/secrets.get_secret("AGNES_API_KEY")`
-(DynamoDB store first, env fallback) — same resolution order as the
-other secrets.
+(env only — GitHub repo secret), same as the other secrets.
 
 ### 5d. Where Agnes fits in the pipeline
 
@@ -267,7 +282,7 @@ other secrets.
 | Video (FAL) | `FAL_KEY` | Unchanged by PR #1 |
 | Images (Replicate FLUX) | `REPLICATE_API_TOKEN` | Fallback path in `image_gen.py` |
 | GitHub dispatch | `GH_PAT` | `/run` honestly reports dispatch failure without it; needs `repo` + workflow scope to push workflow files (see docs/GAPS.md) |
-| Secrets encryption | `MASTER_SECRET` | Fernet key for DynamoDB `yt_config` secrets; decrypt failure now raises |
+| Data store (Google Sheets) | `GOOGLE_SHEETS_ID` + `GOOGLE_SERVICE_ACCOUNT_JSON` | All non-secret data (videos, queue, logs, config); service account shared on the spreadsheet as Editor |
 
 ## 7. Secrets table — GitHub Codespaces secrets (exact names)
 
@@ -288,10 +303,11 @@ guide.
 | `AGNES_BASE_URL` | `https://apihub.agnes-ai.com/v1` | Agnes image + video |
 | `TELEGRAM_BOT_TOKEN` | @BotFather | Telegram bot |
 | `TELEGRAM_ADMIN_ID` | Your numeric Telegram user ID | Telegram auth (fail-closed) |
-| `AWS_ACCESS_KEY_ID` | AWS IAM | DynamoDB + Polly |
-| `AWS_SECRET_ACCESS_KEY` | AWS IAM | DynamoDB + Polly |
-| `AWS_REGION` | `us-east-2` (literal value, not a secret — set everywhere) | DynamoDB region |
-| `MASTER_SECRET` | Generate locally, store once | Fernet encryption of DynamoDB secrets |
+| `AWS_ACCESS_KEY_ID` | AWS IAM | Polly (optional) |
+| `AWS_SECRET_ACCESS_KEY` | AWS IAM | Polly (optional) |
+| `AWS_REGION` | `us-east-2` (literal value, not a secret — set everywhere) | Polly region |
+| `GOOGLE_SHEETS_ID` | Spreadsheet URL | Google Sheets data store |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | GCP service-account key (JSON) | Google Sheets data store |
 | `GH_PAT` | GitHub personal access token | Actions dispatch from Telegram |
 | `PIXABAY_KEY` | Pixabay | Stock media |
 | `TINYFISH_API_KEY` | TinyFish | Research |
@@ -319,9 +335,8 @@ Also set in the Codespace `.env` (from `.env.example` in the repo root):
 # 1. Codespace / runner, repo at main AFTER PR #1 is merged
 # 2. Copy the corrected template and fill it (or use Codespaces secrets)
 cp .env.example .env        # .env is NEVER committed
-# 3. Provision DynamoDB (us-east-2)
-export AWS_REGION=us-east-2
-python -m db.setup_dynamo
+# 3. Provision the Google Sheets tabs
+python -m db.setup_sheets
 # 4. Smoke test (see §9) — do this before enabling the cron
 # 5. Bot (GitHub Actions bot.yml does this on a 4h cron):
 python -u telegram_bot/bot.py --run-duration 12600
@@ -353,7 +368,7 @@ silent "success" is a bug, not a pass.**
    poll loop, not a stub.
 6. **YouTube (after OAuth2 is implemented):** upload a test video as
    **private**, confirm `verify_video_exists()` returns True, confirm
-   the DynamoDB record, confirm local media is purged only after that.
+   the Google Sheets record, confirm local media is purged only after that.
    Never test with a public upload.
 7. **Telegram:** `/ping` with no videos must say "No videos produced
    yet" (not a fake Stripe video); `/run` with `GH_PAT` unset must say

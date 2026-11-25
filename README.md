@@ -8,6 +8,10 @@
 > CI Tests run #18 PASSED (1m 48s). The fail-loud fixes below are now
 > on `main`. YouTube OAuth2 and hosting are still
 > open — see `docs/GAPS.md`. Agnes integration is added in this PR.
+> **Update 25 Nov 2026:** DynamoDB removed — all non-secret data now
+> lives in Google Sheets (`db/sheets.py`, 8 tabs); secrets live in GitHub
+> repo secrets only. Live DynamoDB data could not be migrated (no AWS
+> credentials exist anywhere). See `docs/SETUP.md` §3.
 
 ## What TubePilot AI does
 
@@ -57,7 +61,7 @@ All 27 P0 items are patched to **fail loudly** instead of faking success:
 | Charts | Hardcoded Stripe/Adyen/PayPal data, stub PNG | Bundle data mandatory; raises without it |
 | Render | ~40-byte empty MP4 reported as success | Raises; rendered file validated (≥ 1024 bytes) |
 | Upload | Fake `yt_sim_` / `yt_priv_` IDs, hardcoded verification 1.0 | Real uploader, real `VerificationReport` required, fail = refuse |
-| Telegram | Hardcoded Stripe audit, fake $0.38 cost, fail-open auth | Real DynamoDB reads, fail-closed auth, dispatch failure reported |
+| Telegram | Hardcoded Stripe audit, fake $0.38 cost, fail-open auth | Real Google Sheets reads, fail-closed auth, dispatch failure reported |
 | Region | `us-east-1` / `ap-southeast-2` / `us-east-1` in three places | Single source of truth: `AWS_REGION=us-east-2` |
 | Cron | Empty queue silently made a "How Stripe Makes Money" video | Scheduled run with empty queue exits cleanly, runs nothing |
 
@@ -119,8 +123,8 @@ tools/               llm_provider.py (Gemini + OpenRouter),
                      polly.py, image_gen.py, agnes_ai.py (NEW, this PR),
                      fal_ai.py, replicate_tool.py, pixabay.py,
                      youtube_api.py, secrets.py
-db/                  dynamo.py, setup_dynamo.py (7 yt_* tables, us-east-2)
-config_manager.py    Config from DynamoDB yt_config (fail-loud in prod)
+db/                  sheets.py, setup_sheets.py (8 tabs in one spreadsheet)
+config_manager.py    Config from Google Sheets yt_config tab (fail-loud in prod)
 scripts/             dev_run.py — daily cron entry point
 prompts/             Script / verify prompt files (actually read now)
 .github/workflows/   bot.yml (4h retrigger), daily.yml (04:00 UTC),
@@ -136,7 +140,7 @@ prompts/             Script / verify prompt files (actually read now)
    incl. real investment-advice LLM check), rendered (Polly TTS + images /
    charts / Agnes clips + MoviePy/FFmpeg assembly).
 3. `node_finalize` requires a passing `VerificationReport`, uploads as
-   **private**, verifies the YouTube copy exists, writes the DynamoDB
+   **private**, verifies the YouTube copy exists, writes the Google Sheets
    record, and only then purges local media.
 4. Telegram approval (`pub_*`) publishes private → public. Rejection,
    re-render and re-enqueue are real DB/dispatch actions; Edit / Thumbnail /
@@ -146,7 +150,7 @@ prompts/             Script / verify prompt files (actually read now)
 
 - Spend is **untracked (0.0) until agents report real costs**. Any cost
   figure shown by `/cost` or `/ping` that is not a sum of `cost_usd` stored
-  on DynamoDB records is labelled unknown. Never quote $0.08–$0.14/video
+  on Google Sheets records is labelled unknown. Never quote $0.08–$0.14/video
   or $0.38 MTD — those were fabricated.
 
 ## Configuration — the short version
@@ -166,11 +170,11 @@ Agnes code: **`tools/agnes_ai.py`** (image + video client) and the wiring in **`
 - `TELEGRAM_ADMIN_ID` is **mandatory**. If unset, the bot denies everyone
   (fail-closed). Never run without it.
 - Never put a real secret in a file, a log, chat, or a repo. Secrets live
-  in GitHub Codespaces secrets and/or DynamoDB `yt_config` (Fernet,
-  `MASTER_SECRET`). Secret names only — see `docs/SETUP.md` § "Secrets table".
-- `ALLOW_DEMO_MODE`, `ALLOW_IN_MEMORY_CONFIG`, `ALLOW_IN_MEMORY_SECRETS`
-  are **dev/CI-only**. Production must never set them: they re-enable the
-  placeholder / in-memory fallbacks the audit removed.
+  in GitHub repo secrets (env) only — never in Google Sheets. Secret names
+  only — see `docs/SETUP.md` § "Secrets table".
+- `ALLOW_DEMO_MODE` is **dev-only**. Production must never set it.
+  (The old `ALLOW_IN_MEMORY_CONFIG` / `ALLOW_IN_MEMORY_SECRETS` flags no
+  longer exist — tests mock the Google Sheets client instead.)
 - The old `.env.example` on `main` showed `<redacted>` values in one read.
   That was tool-side redaction of empty values, **not real secrets**
   (confirmed: the file on disk has empty values). No rotation needed

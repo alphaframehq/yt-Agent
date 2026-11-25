@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from config_manager import get_channel_branding, get_config, set_config
-from db.dynamo import (
+from db.sheets import (
     clear_topic_queue,
     enqueue_topic,
     get_video_record,

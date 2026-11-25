@@ -10,13 +10,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # 2026-11-25 (PR #1): the production fixes made config/secrets
-    # fail-loud without DynamoDB. CI has no DynamoDB, so tests run in
-    # explicit in-memory dev mode. These flags are test-only; they do
-    # NOT enable any mock/demo fallback in production code.
-    env:
-      ALLOW_IN_MEMORY_CONFIG: "1"
-      ALLOW_IN_MEMORY_SECRETS: "1"
+    # 2026-11-25 (DynamoDB -> Google Sheets migration): CI has no
+    # Google Sheets credentials. Tests mock the Sheets client
+    # (tests/_sheets_fake.py) instead of touching any live store, and
+    # secrets come from env vars set inside the tests. No live store
+    # is ever used in CI.
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -37,6 +35,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Full Test Suite (62 tests)
+      - name: Run Full Test Suite
         run: |
           python -m unittest discover -s tests -p "test_*.py" -v

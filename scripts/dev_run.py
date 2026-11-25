@@ -1,6 +1,6 @@
 # LOCAL PRODUCTION PATCH — 2026-11-25
 # Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — scripts/dev_run.py
-# Fixes: P0 audit #27 (task #27 cron): scheduled daily run (--scheduled) with an empty DynamoDB queue exits with 'queue empty, nothing to run' (exit 0) instead of defaulting to 'How Stripe Makes Money'; the default topic is used only with explicit --allow-default-topic; hardcoded success-notify values removed — duration from script.meta.estimated_duration_sec, spend from the real pipeline result, shorts_count from actually rendered Shorts (unknown = 0.0, never 600.0/0.09/3).
+# Fixes: P0 audit #27 (task #27 cron): scheduled daily run (--scheduled) with an empty Google Sheets queue exits with 'queue empty, nothing to run' (exit 0) instead of defaulting to 'How Stripe Makes Money'; the default topic is used only with explicit --allow-default-topic; hardcoded success-notify values removed — duration from script.meta.estimated_duration_sec, spend from the real pipeline result, shorts_count from actually rendered Shorts (unknown = 0.0, never 600.0/0.09/3).
 # Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # No secrets in this file — env placeholders / env-var names only.
 
@@ -10,7 +10,7 @@ Runs the complete TubePilot AI pipeline locally or inside a GitHub Codespace.
 Ensures that if running within GitHub Codespaces, `gh codespace stop` is ALWAYS
 called in a `finally` block to protect against runaway billing.
 
-Scheduled (cron) runs: an empty DynamoDB queue exits with
+Scheduled (cron) runs: an empty Google Sheets queue exits with
 "queue empty, nothing to run" — never a default topic. A default topic
 is used only for an explicit local dev run (--allow-default-topic).
 """
@@ -36,7 +36,7 @@ except ImportError:
 
 from config_manager import snapshot_config
 from orchestration.graph import run_pipeline
-from db.dynamo import dequeue_next_topic, get_topic_queue
+from db.sheets import dequeue_next_topic, get_topic_queue
 from scripts.notify_success import notify_pipeline_success
 from scripts.notify_failure import notify_pipeline_failure
 
@@ -81,7 +81,7 @@ def main() -> int:
     parser.add_argument(
         "--scheduled",
         action="store_true",
-        help="Scheduled (cron) run: exit cleanly with 'queue empty, nothing to run' when the DynamoDB queue is empty instead of using a default topic",
+        help="Scheduled (cron) run: exit cleanly with 'queue empty, nothing to run' when the Google Sheets queue is empty instead of using a default topic",
     )
     parser.add_argument(
         "--allow-default-topic",
@@ -93,13 +93,13 @@ def main() -> int:
     topic = args.topic
     pillar = args.pillar
 
-    # If no topic specified, try popping from DynamoDB queue
+    # If no topic specified, try popping from Google Sheets queue
     if not topic:
         queued = dequeue_next_topic()
         if queued and queued.get("topic"):
             topic = queued.get("topic")
             pillar = queued.get("pillar", pillar)
-            logger.info(f"Dequeued topic from DynamoDB queue: '{topic}' [{pillar}]")
+            logger.info(f"Dequeued topic from Google Sheets queue: '{topic}' [{pillar}]")
         elif args.scheduled:
             # P0 (cron): a scheduled run with an empty queue has nothing
             # to do — never silently fall back to a default topic.
@@ -113,7 +113,7 @@ def main() -> int:
             logger.info(f"Queue empty. Explicit dev default topic: '{topic}' [{pillar}]")
         else:
             logger.error(
-                "No topic supplied and the DynamoDB queue is empty. "
+                "No topic supplied and the Google Sheets queue is empty. "
                 "Pass --topic, queue a topic, or use --allow-default-topic "
                 "for an explicit local dev run."
             )

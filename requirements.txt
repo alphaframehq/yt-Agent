@@ -31,10 +31,14 @@ python-telegram-bot>=20.0
 google-api-python-client>=2.100
 google-auth-oauthlib>=1.1
 
+# Google Sheets (data store — service-account auth)
+google-auth>=2.0
+
 # Database
-# (uses boto3 for DynamoDB)
+# (Google Sheets via google-api-python-client; boto3 stays for Polly/Bedrock)
 
 # Security
+# (cryptography is required by google-auth for service-account signing)
 cryptography>=41.0
 
 # Testing

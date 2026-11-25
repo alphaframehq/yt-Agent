@@ -5,8 +5,8 @@
 """GitHub Actions Workflow Dispatcher and Message Bus Bridge for TubePilot AI.
 
 Dispatches pipeline execution without webhooks or public server URLs:
-1. Writes dispatch event to DynamoDB yt_bot_requests
-2. Enqueues topic in DynamoDB yt_topics_queue
+1. Writes dispatch event to Google Sheets yt_bot_requests
+2. Enqueues topic in Google Sheets yt_topics_queue
 3. Calls GitHub Actions REST API: POST /repos/{owner}/{repo}/actions/workflows/daily.yml/dispatches
 """
 
@@ -17,27 +17,27 @@ from typing import Any, Dict, Optional
 import httpx
 from loguru import logger
 
-from db.dynamo import enqueue_topic, write_bot_request
-from tools.secrets import get_secret
+from db.sheets import enqueue_topic, write_bot_request
+from tools.secrets import _get_secret_optional
 
 __all__ = ["dispatch_pipeline_run"]
 
 
 def dispatch_pipeline_run(topic: str, pillar: str = "finance_to_technical") -> Dict[str, Any]:
-    """Trigger GitHub Actions run for topic using GH_PAT and DynamoDB message bus."""
+    """Trigger GitHub Actions run for topic using GH_PAT and Google Sheets message bus."""
     logger.info(f"Bot triggering workflow dispatch for topic: '{topic}' [{pillar}]")
 
-    # 1. Enqueue topic in DynamoDB
+    # 1. Enqueue topic in Google Sheets
     top_id = enqueue_topic(topic=topic, pillar=pillar, priority=10)
 
-    # 2. Write request to DynamoDB message bus
+    # 2. Write request to Google Sheets message bus
     req_id = write_bot_request(
         request_type="run_pipeline",
         inputs={"topic": topic, "pillar": pillar, "topic_id": top_id},
     )
 
     # 3. Call GitHub Actions API
-    gh_pat = get_secret("GH_PAT") or os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
+    gh_pat = _get_secret_optional("GH_PAT") or os.getenv("GITHUB_TOKEN")
     full_repo = os.getenv("GITHUB_REPOSITORY", "")
     if "/" in full_repo:
         repo_owner, repo_name = full_repo.split("/", 1)
@@ -74,7 +74,7 @@ def dispatch_pipeline_run(topic: str, pillar: str = "finance_to_technical") -> D
             details = f"HTTP dispatch request failed: {e}"
     else:
         # dispatched stays False: no GitHub dispatch was even attempted.
-        details = "❌ Dispatch failed: GH_PAT not configured — GitHub dispatch not attempted. Request recorded in DynamoDB topics queue for scheduled cron run."
+        details = "❌ Dispatch failed: GH_PAT not configured — GitHub dispatch not attempted. Request recorded in Google Sheets topics queue for scheduled cron run."
 
     return {
         "dispatched": dispatched,

@@ -16,8 +16,24 @@ from pathlib import Path
 # Ensure yt-agent root is on python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
-os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
+from tests._sheets_fake import install_fake_sheets
+
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# Tests must never touch the real Sheets API — mock the client.
+# (These tests previously relied on ALLOW_IN_MEMORY_CONFIG; the fake
+# replaces that dev-only fallback. Installed in setUpModule; stopped in tearDownModule.)
+_FAKE_SHEETS = None
+_SHEETS_PATCHER = None
+
+
+def setUpModule():
+    global _FAKE_SHEETS, _SHEETS_PATCHER
+    _FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
+
+def tearDownModule():
+    if _SHEETS_PATCHER is not None:
+        _SHEETS_PATCHER.stop()
 
 from tools.llm_provider import LLMProvider, call_with_fallback
 from tools.image_gen import generate_image, get_cached_image_path

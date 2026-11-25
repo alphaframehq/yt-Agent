@@ -6,6 +6,11 @@ Validates:
 3. LLMProvider seamless failover on HTTP 429 / 401 / 403
 4. Imagen 3 image generation key pool retry
 5. Telegram Bot /keys pool commands (list, add, rotate)
+
+25 Nov 2026 (DynamoDB -> Google Sheets migration): secrets are
+env-only now — the pool is configured through environment variables
+(GitHub repo secrets in production), never through a store. Tests set
+the env vars directly instead of calling set_secret().
 """
 
 import os
@@ -21,33 +26,37 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from tools.secrets import (
-    add_gemini_pool_key,
     get_active_gemini_key,
     get_gemini_pool_keys,
     get_gemini_pool_status,
     mark_gemini_key_failed,
     rotate_gemini_key,
     reset_gemini_pool,
-    set_secret,
 )
 from tools.llm_provider import LLMProvider
 from tools.image_gen import _generate_imagen3
 from telegram_bot.keys import handle_keys_command
 
 
-class TestGeminiKeyPool(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        os.environ["MASTER_SECRET"] = "gemini_pool_unit_test_master_secret_8888"
-        os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+_POOL_ENV = {
+    "GEMINI_KEY": "AIzaSyPrimary001_AABBCCDDEEFFGG11",
+    "GEMINI_KEY_1": "AIzaSyStandby002_HHIIJJKKLLMMNN22",
+    "GEMINI_KEY_2": "AIzaSyReserve003_OOPPQQRRSSTTUU33",
+}
 
+
+class TestGeminiKeyPool(unittest.TestCase):
     def setUp(self):
         reset_gemini_pool()
-        # Configure a pool of 3 Gemini keys
-        set_secret("GEMINI_KEY", "AIzaSyPrimary001_AABBCCDDEEFFGG11")
-        set_secret("GEMINI_KEY_1", "AIzaSyStandby002_HHIIJJKKLLMMNN22")
-        set_secret("GEMINI_KEY_2", "AIzaSyReserve003_OOPPQQRRSSTTUU33")
+        # Configure a pool of 3 Gemini keys via env vars (the only
+        # source of secrets now — GitHub repo secrets in production).
+        for name, value in _POOL_ENV.items():
+            os.environ[name] = value
 
+    def tearDown(self):
+        for name in _POOL_ENV:
+            os.environ.pop(name, None)
+        reset_gemini_pool()
 
     def test_1_pool_discovery(self):
         """Verify all configured Gemini keys are discovered and deduplicated."""
@@ -145,10 +154,11 @@ class TestGeminiKeyPool(unittest.TestCase):
         self.assertIn("Gemini API Key Pool", res_list["text"])
         self.assertFalse(res_list["delete_caller_msg"])
 
-        # /keys pool add gemini NEW_KEY
+        # /keys pool add gemini NEW_KEY — keys can no longer be stored
+        # from the bot; it must direct the operator to GitHub settings.
         new_key = "AIzaSyFourthKey999_ZZYYXXWWVVUU44"
         res_add = handle_keys_command(["pool", "add", "gemini", new_key])
-        self.assertIn("Added Gemini API key to pool", res_add["text"])
+        self.assertIn("GitHub", res_add["text"])
         self.assertTrue(res_add["delete_caller_msg"])  # opsec auto-delete
 
         # /keys pool rotate gemini

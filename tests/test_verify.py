@@ -28,10 +28,27 @@ from unittest.mock import patch
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
-os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# The in-memory fake Sheets service backs config writes in test_8.
+from tests._sheets_fake import install_fake_sheets
 
-from _fixtures import make_test_bundle, make_test_script
+_FAKE_SHEETS = None
+_SHEETS_PATCHER = None
+
+
+def setUpModule():
+    global _FAKE_SHEETS, _SHEETS_PATCHER
+    _FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+    from config_manager import _invalidate_cache
+
+    _invalidate_cache()
+
+
+def tearDownModule():
+    if _SHEETS_PATCHER is not None:
+        _SHEETS_PATCHER.stop()
+
+from tests._fixtures import make_test_bundle, make_test_script
 from agents.verify import VerificationAgent, _AdviceVerdict
 
 
