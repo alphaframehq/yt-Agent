@@ -122,10 +122,19 @@ def install_fake_sheets() -> tuple:
     production code validates its presence before calling the
     service). Returns ``(fake, patcher)`` — call ``patcher.stop()``
     in ``tearDownModule``.
+
+    The fake is pre-provisioned with the header row of every tab
+    (exactly as ``setup_all_sheets()`` does in production): all read
+    code assumes row 1 is the header and skips it, so an empty tab
+    would silently swallow the first appended data row.
     """
     os.environ.setdefault("GOOGLE_SHEETS_ID", "test-spreadsheet-id")
     os.environ.setdefault("GOOGLE_SERVICE_ACCOUNT_JSON", '{"type": "service_account"}')
     fake = FakeSheetsService()
+    from db.sheets import TAB_HEADERS
+
+    for tab, headers in TAB_HEADERS.items():
+        fake.store[tab] = [list(headers)]
     patcher = patch("db.sheets._get_service", return_value=fake)
     patcher.start()
     return fake, patcher
