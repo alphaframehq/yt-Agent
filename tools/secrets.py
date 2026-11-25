@@ -66,6 +66,12 @@ _ENV_SECRET_NAMES: tuple[str, ...] = (
     "YT_REFRESH_TOKEN",
 )
 
+# Gemini API keys come in two formats, both valid:
+# - legacy standard keys starting with "AIza"
+# - auth keys issued by Google AI Studio since 28 May 2026, starting with "AQ."
+_GEMINI_KEY_PREFIXES: tuple[str, ...] = ("AIza", "AQ.")
+
+
 # ---------------------------------------------------------------------------
 # Validation rules  {prefix | min-length}
 # ---------------------------------------------------------------------------
@@ -94,14 +100,14 @@ def _validate_secret(name: str, value: str) -> None:
         if name == "GEMINI_KEY_POOL":
             for part in value.split(","):
                 part = part.strip()
-                if part and (not part.startswith("AIza") or len(part) < 20):
+                if part and (not part.startswith(_GEMINI_KEY_PREFIXES) or len(part) < 20):
                     raise ValueError(
-                        "Every key in GEMINI_KEY_POOL must start with 'AIza' and be >= 20 characters"
+                        "Every key in GEMINI_KEY_POOL must start with 'AIza' or 'AQ.' and be >= 20 characters"
                     )
             return
-        if not value.startswith("AIza"):
+        if not value.startswith(_GEMINI_KEY_PREFIXES):
             raise ValueError(
-                f"{name} must start with 'AIza' (got '{value[:len('AIza')]}')"
+                f"{name} must start with 'AIza' or 'AQ.' (got '{value[:4]}')"
             )
         if len(value) < 20:
             raise ValueError(
@@ -399,7 +405,7 @@ def get_gemini_pool_keys() -> list[str]:
 
     # 1. Primary key
     primary = _get_secret_optional("GEMINI_KEY")
-    if primary and primary.startswith("AIza"):
+    if primary and primary.startswith(_GEMINI_KEY_PREFIXES):
         keys.append(primary)
 
     # 2. Key pool string (comma-separated or JSON list)
@@ -409,18 +415,18 @@ def get_gemini_pool_keys() -> list[str]:
             parsed = json.loads(pool_str)
             if isinstance(parsed, list):
                 for k in parsed:
-                    if isinstance(k, str) and k.startswith("AIza") and k not in keys:
+                    if isinstance(k, str) and k.startswith(_GEMINI_KEY_PREFIXES) and k not in keys:
                         keys.append(k)
         except Exception:
             for part in pool_str.split(","):
                 k = part.strip()
-                if k.startswith("AIza") and k not in keys:
+                if k.startswith(_GEMINI_KEY_PREFIXES) and k not in keys:
                     keys.append(k)
 
     # 3. Indexed standby keys from the environment
     for i in range(1, 21):
         env_val = _get_secret_optional(f"GEMINI_KEY_{i}")
-        if env_val and env_val.startswith("AIza") and env_val not in keys:
+        if env_val and env_val.startswith(_GEMINI_KEY_PREFIXES) and env_val not in keys:
             keys.append(env_val)
 
     return keys
@@ -515,7 +521,7 @@ def add_gemini_pool_key(key: str) -> str:
     ``GEMINI_KEY_<n>``).
 
     Args:
-        key: Raw Gemini API key (must start with 'AIza')
+        key: Raw Gemini API key (must start with 'AIza' or 'AQ.')
 
     Returns:
         The secret name assigned, e.g. 'GEMINI_KEY_2' (only when the
@@ -526,8 +532,8 @@ def add_gemini_pool_key(key: str) -> str:
         RuntimeError: Always for a new key — add it in GitHub repo settings.
     """
     key = key.strip()
-    if not key.startswith("AIza") or len(key) < 20:
-        raise ValueError("Invalid Gemini API key format (must start with 'AIza' and be >= 20 chars)")
+    if not key.startswith(_GEMINI_KEY_PREFIXES) or len(key) < 20:
+        raise ValueError("Invalid Gemini API key format (must start with 'AIza' or 'AQ.' and be >= 20 chars)")
 
     existing_keys = get_gemini_pool_keys()
     if key in existing_keys:
