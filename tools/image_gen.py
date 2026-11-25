@@ -40,7 +40,7 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from tools.secrets import (
-    get_secret,
+    _get_secret_optional,
     get_gemini_pool_keys,
     mark_gemini_key_failed,
     mask_secret,
@@ -245,7 +245,7 @@ def _generate_gemini_native(prompt: str, dest_path: Path) -> Path:
 
 def _generate_flux(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") -> Path:
     """Call Replicate FLUX Schnell."""
-    token = get_secret("REPLICATE_API_TOKEN")
+    token = _get_secret_optional("REPLICATE_API_TOKEN")
     if not token:
         raise ValueError("REPLICATE_API_TOKEN not set")
 

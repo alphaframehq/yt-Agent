@@ -1,54 +1,69 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25
-# Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — tools/secrets.py
-# Fixes: P0 audit #25 (region) + P1 #11 (task #27 partial): DynamoDB failure raises in production; in-memory-only storage only with explicit ALLOW_IN_MEMORY_SECRETS=1 (default off); get_secret raises on decrypt failure when a stored token exists; test_secret() returns False for untested providers instead of True. Fernet encryption unchanged.
-# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
-# No secrets in this file — env placeholders / env-var names only.
+# No secrets in this file — env-var names only.
+# 25 Nov 2026 (DynamoDB -> Google Sheets migration): secrets are NO
+# longer stored anywhere in this repo's data store. DynamoDB is gone
+# and NO secret is stored in Google Sheets. Every secret comes from
+# the environment — in production, the GitHub repo secrets
+# (Settings -> Secrets and variables -> Actions), passed into the
+# runner as env vars; locally, the Codespace `.env`.
+# get_secret() reads os.environ only and raises loudly when a secret
+# is missing. The private _get_secret_optional() helper exists ONLY
+# for genuine fallback/presence-check sites (LLM provider chain,
+# GH_PAT checks, health diagnostics, best-effort notifications) —
+# it must never be used to silently substitute a different secret.
 
 """
-Encrypted secrets manager for TubePilot AI.
+Environment-only secrets manager for TubePilot AI.
 
-Encryption: Fernet with key derived from the ``MASTER_SECRET`` env var
-(PBKDF2-HMAC-SHA256, 480 000 iterations).
-Storage: DynamoDB ``yt_config`` table (config_id = "keys").
-Env-var fallback for first-boot / local dev.
-Production behaviour: DynamoDB unavailable -> fail loudly (RuntimeError).
-In-memory-only storage is used ONLY when the explicit dev flag
-``ALLOW_IN_MEMORY_SECRETS=1`` is set (default off).
-AWS region comes from the single env var ``AWS_REGION``.
+Resolution: ``os.environ`` only. There is no encrypted store, no
+DynamoDB table and no Sheets tab holding secrets — a missing secret
+raises ``RuntimeError`` (fail loudly) instead of falling back to
+anything else. Rotation / setting / deleting a secret is done in the
+GitHub repo settings, not through the bot: the ``/keys set`` /
+``/keys delete`` / ``/keys rotate`` commands now explain that
+instead of persisting anything.
 """
 
 from __future__ import annotations
 
-import base64
-import copy
 import json
 import os
 import time
 from typing import Any, Optional
 
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives.hashes import SHA256
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import httpx
 from loguru import logger
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-_TABLE_NAME: str = "yt_config"
-_SECRETS_ID: str = "keys"
-_PBKDF2_ITERATIONS: int = 480_000
-_SALT: bytes = b"tubepilot-ai-secrets-v1"  # static salt — rotated via MASTER_SECRET
+_GITHUB_SECRETS_HINT: str = (
+    "Secrets are managed in the GitHub repo settings "
+    "(Settings -> Secrets and variables -> Actions) — set the value "
+    "there and re-run. The bot cannot store secrets anymore: DynamoDB "
+    "was removed 25 Nov 2026 and no secret is ever written to Google Sheets."
+)
 
-# Known env-var names for first-boot fallback
+# Known env-var names (used by list_secrets() and documentation).
 _ENV_SECRET_NAMES: tuple[str, ...] = (
     "GEMINI_KEY",
+    "GEMINI_KEY_POOL",
     "OPENROUTER_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "PIXABAY_KEY",
     "ELEVEN_LABS_KEY",
     "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_ADMIN_ID",
+    "GH_PAT",
+    "AGNES_API_KEY",
+    "AGNES_BASE_URL",
+    "TINYFISH_API_KEY",
+    "FAL_KEY",
+    "REPLICATE_API_TOKEN",
+    "YT_CLIENT_ID",
+    "YT_CLIENT_SECRET",
+    "YT_REFRESH_TOKEN",
 )
 
 # ---------------------------------------------------------------------------
@@ -62,169 +77,6 @@ _VALIDATION_RULES: dict[str, dict[str, Any]] = {
     "AWS_SECRET_ACCESS_KEY": {"min_length": 16},
     "PIXABAY_KEY": {"min_length": 20},
 }
-
-# ---------------------------------------------------------------------------
-# DynamoDB helpers (lazy, graceful)
-# ---------------------------------------------------------------------------
-
-_dynamo_table: Any = None
-_dynamo_available: bool | None = None
-
-# Single source of truth for the AWS region: env var AWS_REGION only.
-_AWS_REGION: str | None = os.environ.get("AWS_REGION") or None
-# Explicit opt-in for local dev only. Default off: in production a
-# DynamoDB failure must raise, never silently keep secrets in-memory only.
-_ALLOW_IN_MEMORY_SECRETS: bool = os.environ.get("ALLOW_IN_MEMORY_SECRETS", "").strip().lower() in ("1", "true", "yes")
-
-def _get_table() -> Any:
-    """Return the DynamoDB Table resource.
-
-    Raises:
-        RuntimeError: If DynamoDB is unavailable and the explicit dev
-            flag ``ALLOW_IN_MEMORY_SECRETS`` is not set. In dev-flag mode
-            only, returns ``None``.
-    """
-    global _dynamo_table, _dynamo_available
-
-    if _dynamo_available is False:
-        if _ALLOW_IN_MEMORY_SECRETS:
-            return None
-        raise RuntimeError(
-            "DynamoDB unavailable for secrets (see earlier log line); "
-            "set ALLOW_IN_MEMORY_SECRETS=1 only for explicit local dev"
-        )
-    if _dynamo_table is not None:
-        return _dynamo_table
-
-    try:
-        import boto3  # noqa: WPS433
-
-        _dynamo_table = boto3.resource("dynamodb", region_name=_AWS_REGION).Table(_TABLE_NAME)
-        _dynamo_table.table_status  # noqa: B018
-        _dynamo_available = True
-        logger.info("Secrets DynamoDB table '{}' connected", _TABLE_NAME)
-        return _dynamo_table
-    except Exception as exc:  # noqa: BLE001
-        _dynamo_available = False
-        if _ALLOW_IN_MEMORY_SECRETS:
-            logger.warning(
-                "DynamoDB unavailable for secrets ({}); ALLOW_IN_MEMORY_SECRETS=1, "
-                "in-memory only (dev only)",
-                exc,
-            )
-            return None
-        raise RuntimeError(f"DynamoDB unavailable for secrets: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
-# Encryption helpers
-# ---------------------------------------------------------------------------
-
-
-_cached_fernet_master: str | None = None
-_cached_fernet_key: bytes | None = None
-
-
-def _derive_fernet_key() -> bytes:
-    """Derive a 32-byte Fernet key from ``MASTER_SECRET`` env var.
-
-    Raises:
-        RuntimeError: If ``MASTER_SECRET`` is not set.
-    """
-    global _cached_fernet_master, _cached_fernet_key
-    master = os.environ.get("MASTER_SECRET")
-    if not master:
-        raise RuntimeError(
-            "MASTER_SECRET env var is required for secrets encryption"
-        )
-    if _cached_fernet_key is not None and _cached_fernet_master == master:
-        return _cached_fernet_key
-
-    kdf = PBKDF2HMAC(
-        algorithm=SHA256(),
-        length=32,
-        salt=_SALT,
-        iterations=_PBKDF2_ITERATIONS,
-    )
-    _cached_fernet_key = base64.urlsafe_b64encode(kdf.derive(master.encode()))
-    _cached_fernet_master = master
-    return _cached_fernet_key
-
-
-
-def _fernet() -> Fernet:
-    """Return a Fernet instance keyed to ``MASTER_SECRET``."""
-    return Fernet(_derive_fernet_key())
-
-
-def _encrypt(plaintext: str) -> str:
-    """Encrypt *plaintext* and return a URL-safe base-64 token string."""
-    return _fernet().encrypt(plaintext.encode()).decode()
-
-
-def _decrypt(token: str) -> str:
-    """Decrypt a Fernet *token* string and return the plaintext."""
-    return _fernet().decrypt(token.encode()).decode()
-
-
-# ---------------------------------------------------------------------------
-# DynamoDB secret store I/O
-# ---------------------------------------------------------------------------
-
-
-_in_memory_secrets: dict[str, str] = {}
-
-
-def _load_secrets_record() -> dict[str, str]:
-    """Load the encrypted secrets record from DynamoDB.
-
-    Raises:
-        RuntimeError: In production when DynamoDB is unavailable or the
-            read fails. In dev-flag mode only, returns the in-memory dict.
-    """
-    table = _get_table()
-    if table is None:
-        if not _ALLOW_IN_MEMORY_SECRETS:
-            raise RuntimeError(
-                "DynamoDB unavailable for secrets and ALLOW_IN_MEMORY_SECRETS is not set"
-            )
-        return dict(_in_memory_secrets)
-    try:
-        resp = table.get_item(Key={"config_id": _SECRETS_ID})
-        item = resp.get("Item", {})
-        data = {k: v for k, v in item.items() if k != "config_id"}
-        if data:
-            _in_memory_secrets.update(data)
-        return data or dict(_in_memory_secrets)
-    except Exception as exc:  # noqa: BLE001
-        if not _ALLOW_IN_MEMORY_SECRETS:
-            raise RuntimeError(f"Failed to load secrets from DynamoDB: {exc}") from exc
-        logger.warning("Failed to load secrets from DynamoDB: {}", exc)
-        return dict(_in_memory_secrets)
-
-
-def _save_secrets_record(secrets: dict[str, str]) -> None:
-    """Write the full encrypted secrets record to DynamoDB and in-memory cache.
-
-    Raises:
-        RuntimeError: If DynamoDB is unavailable (production) or the
-            write fails. Callers (set/rotate/delete/import) must treat
-            a raise as "not persisted".
-    """
-    global _in_memory_secrets
-    table = _get_table()  # raises in production when DynamoDB is down
-    if table is None:
-        # Dev-flag mode only: _get_table() returns None instead of raising.
-        _in_memory_secrets = dict(secrets)
-        logger.warning("DynamoDB unavailable — secrets persisted in-memory only (ALLOW_IN_MEMORY_SECRETS=1, dev only)")
-        return
-    try:
-        item = {"config_id": _SECRETS_ID, **secrets}
-        table.put_item(Item=item)
-        _in_memory_secrets = dict(secrets)
-        logger.info("Secrets record persisted to DynamoDB")
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Failed to save secrets to DynamoDB: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +96,7 @@ def _validate_secret(name: str, value: str) -> None:
                 part = part.strip()
                 if part and (not part.startswith("AIza") or len(part) < 20):
                     raise ValueError(
-                        f"Every key in GEMINI_KEY_POOL must start with 'AIza' and be >= 20 characters"
+                        "Every key in GEMINI_KEY_POOL must start with 'AIza' and be >= 20 characters"
                     )
             return
         if not value.startswith("AIza"):
@@ -274,7 +126,6 @@ def _validate_secret(name: str, value: str) -> None:
         )
 
 
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -300,7 +151,6 @@ __all__ = [
 ]
 
 
-
 def mask_secret(value: str) -> str:
     """Return a masked version of *value* showing the first 6 and last 4 chars.
 
@@ -315,96 +165,89 @@ def mask_secret(value: str) -> str:
     return f"{value[:6]}…{value[-4:]}"
 
 
-def get_secret(name: str) -> Optional[str]:
-    """Retrieve a decrypted secret by *name*.
+def _get_secret_optional(name: str) -> Optional[str]:
+    """Return the env value for *name*, or ``None`` if unset/empty.
 
-    Resolution order:
-    1. DynamoDB encrypted store.
-    2. Environment variable (first-boot / local-dev fallback).
+    Private helper for genuine fallback / presence-check sites only:
+    the LLM provider chain, GH_PAT checks, health diagnostics and
+    best-effort notifications. Every other caller must use
+    :func:`get_secret`, which raises on a missing secret.
+    """
+    value = os.environ.get(name)
+    return value if value else None
+
+
+def get_secret(name: str) -> str:
+    """Retrieve a secret by *name* from the environment only.
 
     Args:
         name: Secret identifier, e.g. ``"GEMINI_KEY"``.
 
     Returns:
-        Decrypted secret string, or ``None`` if not found anywhere.
+        The secret string from ``os.environ``.
 
     Raises:
-        RuntimeError: If a stored token exists but cannot be decrypted
-            (wrong MASTER_SECRET / corrupt token) — never silently falls
-            back to the env var in that case.
+        RuntimeError: If the secret is not set in the environment.
+            There is no store to fall back to — DynamoDB was removed
+            and secrets are never kept in Google Sheets.
     """
-    secrets = _load_secrets_record()
-    token = secrets.get(name)
-    if token is not None:
-        try:
-            plaintext = _decrypt(token)
-            logger.debug("Secret '{}' loaded from DynamoDB", name)
-            return plaintext
-        except (InvalidToken, RuntimeError) as exc:
-            # P0: a stored token that cannot be decrypted is a real
-            # failure (wrong MASTER_SECRET / corrupt token) — never
-            # silently fall through to the env var and use a different
-            # secret than the one that was stored.
-            raise RuntimeError(
-                f"Failed to decrypt stored secret '{name}': {exc}"
-            ) from exc
-
-    # Env-var fallback (only when no stored token exists)
-    env_val = os.environ.get(name)
-    if env_val:
-        logger.debug("Secret '{}' loaded from env var (first-boot fallback)", name)
-        return env_val
-
-    logger.debug("Secret '{}' not found", name)
-    return None
+    value = _get_secret_optional(name)
+    if value is not None:
+        logger.debug("Secret '{}' loaded from env var", name)
+        return value
+    raise RuntimeError(f"Secret '{name}' is not set. {_GITHUB_SECRETS_HINT}")
 
 
 def set_secret(name: str, value: str) -> None:
-    """Validate, encrypt, and persist a secret.
+    """Validate *value* and direct the operator to GitHub repo settings.
 
-    Args:
-        name:  Secret identifier.
-        value: Raw secret value.
+    Secrets can no longer be stored from code — there is no secrets
+    store anymore. This validates the value first (so a bad value
+    still fails fast with ``ValueError``), then raises telling the
+    operator where to set it.
 
     Raises:
         ValueError: If the value fails validation rules.
+        RuntimeError: Always (after validation) — setting a secret
+            from code is not supported anymore.
     """
     _validate_secret(name, value)
-    secrets = _load_secrets_record()
-    secrets[name] = _encrypt(value)
-    _save_secrets_record(secrets)
-    logger.info("Secret '{}' saved ({})", name, mask_secret(value))
+    raise RuntimeError(
+        f"Cannot store secret '{name}' from code. {_GITHUB_SECRETS_HINT}"
+    )
 
 
 def delete_secret(name: str) -> None:
-    """Remove a secret from the DynamoDB store.
+    """Direct the operator to GitHub repo settings to delete a secret.
 
-    Args:
-        name: Secret identifier to delete.
+    Raises:
+        RuntimeError: Always — deleting a secret from code is not
+            supported anymore.
     """
-    secrets = _load_secrets_record()
-    if name in secrets:
-        del secrets[name]
-        _save_secrets_record(secrets)
-        logger.info("Secret '{}' deleted", name)
-    else:
-        logger.warning("Secret '{}' not found — nothing to delete", name)
+    raise RuntimeError(
+        f"Cannot delete secret '{name}' from code. {_GITHUB_SECRETS_HINT}"
+    )
 
 
 def list_secrets() -> dict[str, str]:
-    """Return all stored secrets with masked values.
+    """Return all configured secrets (from env) with masked values.
+
+    Only secret names that are actually set in the environment are
+    listed. Values are masked; nothing secret is ever logged or
+    returned in full.
 
     Returns:
-        Mapping of secret name → masked value.
+        Mapping of secret name -> masked value.
     """
-    secrets = _load_secrets_record()
+    names = set(_ENV_SECRET_NAMES)
+    for env_name in os.environ:
+        if env_name.startswith("GEMINI_KEY_"):
+            names.add(env_name)
     masked: dict[str, str] = {}
-    for name, token in secrets.items():
-        try:
-            plaintext = _decrypt(token)
-            masked[name] = mask_secret(plaintext)
-        except (InvalidToken, RuntimeError):
-            masked[name] = "<decryption-failed>"
+    for name in sorted(names):
+        value = _get_secret_optional(name)
+        if value is not None:
+            masked[name] = mask_secret(value)
     return masked
 
 
@@ -420,18 +263,16 @@ def test_secret(name: str) -> bool:
 
     Returns:
         ``True`` if the key appears valid and the service responds.
-        ``False`` for providers with no live test implemented (never
-        ``True`` by assumption).
+        ``False`` when the secret is unset or for providers with no
+        live test implemented (never ``True`` by assumption).
     """
-    value = get_secret(name)
+    value = _get_secret_optional(name)
     if value is None:
         logger.warning("Cannot test '{}' — secret not found", name)
         return False
 
     try:
         if name == "GEMINI_KEY":
-            import httpx
-
             resp = httpx.get(
                 "https://generativelanguage.googleapis.com/v1beta/models",
                 params={"key": value},
@@ -440,8 +281,6 @@ def test_secret(name: str) -> bool:
             return resp.status_code == 200
 
         if name == "OPENROUTER_KEY":
-            import httpx
-
             resp = httpx.get(
                 "https://openrouter.ai/api/v1/models",
                 headers={"Authorization": f"Bearer {value}"},
@@ -455,14 +294,12 @@ def test_secret(name: str) -> bool:
             sts = boto3.client(
                 "sts",
                 aws_access_key_id=value,
-                aws_secret_access_key=get_secret("AWS_SECRET_ACCESS_KEY") or "",
+                aws_secret_access_key=_get_secret_optional("AWS_SECRET_ACCESS_KEY") or "",
             )
             sts.get_caller_identity()
             return True
 
         if name == "PIXABAY_KEY":
-            import httpx
-
             resp = httpx.get(
                 "https://pixabay.com/api/",
                 params={"key": value, "q": "test", "per_page": 3},
@@ -471,8 +308,6 @@ def test_secret(name: str) -> bool:
             return resp.status_code == 200
 
         if name == "ELEVEN_LABS_KEY":
-            import httpx
-
             resp = httpx.get(
                 "https://api.elevenlabs.io/v1/voices",
                 headers={"xi-api-key": value},
@@ -481,8 +316,6 @@ def test_secret(name: str) -> bool:
             return resp.status_code == 200
 
         if name == "TELEGRAM_BOT_TOKEN":
-            import httpx
-
             resp = httpx.get(
                 f"https://api.telegram.org/bot{value}/getMe",
                 timeout=10,
@@ -498,82 +331,42 @@ def test_secret(name: str) -> bool:
 
 
 def rotate_secret(name: str, new_value: str) -> None:
-    """Rotate a secret: archive the old value, then save the new one.
-
-    The old value is stored under ``{name}__archived_{timestamp}``.
-
-    Args:
-        name:      Secret identifier.
-        new_value: Replacement secret value.
+    """Validate *new_value* and direct the operator to GitHub repo settings.
 
     Raises:
         ValueError: If the new value fails validation.
+        RuntimeError: Always (after validation) — rotating a secret
+            from code is not supported anymore.
     """
     _validate_secret(name, new_value)
-    secrets = _load_secrets_record()
-
-    # Archive old value (if any)
-    old_token = secrets.get(name)
-    if old_token is not None:
-        archive_key = f"{name}__archived_{int(time.time())}"
-        secrets[archive_key] = old_token
-        logger.info("Old secret '{}' archived as '{}'", name, archive_key)
-
-    secrets[name] = _encrypt(new_value)
-    _save_secrets_record(secrets)
-    logger.info("Secret '{}' rotated ({})", name, mask_secret(new_value))
+    raise RuntimeError(
+        f"Cannot rotate secret '{name}' from code. {_GITHUB_SECRETS_HINT}"
+    )
 
 
 def export_secrets() -> str:
-    """Export all encrypted secrets as a base-64 encoded JSON string.
+    """No longer supported — there is no encrypted secrets store to export.
 
-    The export contains the raw Fernet tokens — they can only be
-    re-imported with the same ``MASTER_SECRET``.
-
-    Returns:
-        Base-64 encoded JSON payload.
+    Raises:
+        RuntimeError: Always.
     """
-    secrets = _load_secrets_record()
-    payload = json.dumps(secrets, separators=(",", ":"))
-    encoded = base64.b64encode(payload.encode()).decode()
-    logger.info("Exported {} secret(s)", len(secrets))
-    return encoded
+    raise RuntimeError(
+        "Secrets export is no longer supported: secrets live in GitHub "
+        "repo settings and there is no encrypted store to back up. "
+        "Rotate a secret by updating it in the repo settings."
+    )
 
 
 def import_secrets(b64_data: str) -> None:
-    """Restore secrets from a base-64 encoded backup.
-
-    Merges imported secrets into the current store (existing keys
-    are overwritten).
-
-    Args:
-        b64_data: Base-64 encoded JSON payload from ``export_secrets()``.
+    """No longer supported — there is no encrypted secrets store to restore.
 
     Raises:
-        ValueError: If the data cannot be decoded / parsed.
+        RuntimeError: Always.
     """
-    try:
-        raw = base64.b64decode(b64_data)
-        incoming: dict[str, str] = json.loads(raw)
-    except Exception as exc:
-        raise ValueError(f"Invalid backup data: {exc}") from exc
-
-    if not isinstance(incoming, dict):
-        raise ValueError("Backup payload must be a JSON object")
-
-    # Verify each token is decryptable
-    for name, token in incoming.items():
-        try:
-            _decrypt(token)
-        except (InvalidToken, RuntimeError) as exc:
-            raise ValueError(
-                f"Cannot decrypt secret '{name}' — MASTER_SECRET mismatch?"
-            ) from exc
-
-    secrets = _load_secrets_record()
-    secrets.update(incoming)
-    _save_secrets_record(secrets)
-    logger.info("Imported {} secret(s)", len(incoming))
+    raise RuntimeError(
+        "Secrets import is no longer supported: secrets live in GitHub "
+        "repo settings and there is no encrypted store to restore into."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -592,26 +385,25 @@ def reset_gemini_pool() -> None:
 
 
 def get_gemini_pool_keys() -> list[str]:
-    """Discover all configured Gemini API keys from DynamoDB, config, and environment.
+    """Discover all configured Gemini API keys from the environment.
 
     Scans:
     1. GEMINI_KEY (primary default)
     2. GEMINI_KEY_POOL (comma-separated or JSON list of keys)
-    3. GEMINI_KEY_1 .. GEMINI_KEY_20 (indexed standby keys in record)
-    4. Corresponding environment variables
+    3. GEMINI_KEY_1 .. GEMINI_KEY_20 (indexed standby keys, env vars)
 
     Returns:
-        Deduplicated list of decrypted Gemini API keys in natural index order.
+        Deduplicated list of Gemini API keys in natural index order.
     """
     keys: list[str] = []
 
     # 1. Primary key
-    primary = get_secret("GEMINI_KEY")
+    primary = _get_secret_optional("GEMINI_KEY")
     if primary and primary.startswith("AIza"):
         keys.append(primary)
 
     # 2. Key pool string (comma-separated or JSON list)
-    pool_str = get_secret("GEMINI_KEY_POOL")
+    pool_str = _get_secret_optional("GEMINI_KEY_POOL")
     if pool_str:
         try:
             parsed = json.loads(pool_str)
@@ -625,31 +417,11 @@ def get_gemini_pool_keys() -> list[str]:
                 if k.startswith("AIza") and k not in keys:
                     keys.append(k)
 
-    # 3. Read directly from loaded secrets record for fast O(1) indexed lookup
-    all_secrets = _load_secrets_record()
-    indexed_names = sorted(
-        [
-            n
-            for n in all_secrets
-            if n.startswith("GEMINI_KEY_") and not n.startswith("GEMINI_KEY__archived")
-        ],
-        key=lambda n: int(n.split("_")[-1]) if n.split("_")[-1].isdigit() else 999,
-    )
-    for name in indexed_names:
-        token = all_secrets[name]
-        try:
-            decrypted = _decrypt(token)
-            if decrypted.startswith("AIza") and decrypted not in keys:
-                keys.append(decrypted)
-        except Exception:
-            pass
-
-    # 4. Check environment variables
-    for env_name in sorted(os.environ.keys()):
-        if env_name.startswith("GEMINI_KEY_"):
-            env_val = os.environ[env_name]
-            if env_val.startswith("AIza") and env_val not in keys:
-                keys.append(env_val)
+    # 3. Indexed standby keys from the environment
+    for i in range(1, 21):
+        env_val = _get_secret_optional(f"GEMINI_KEY_{i}")
+        if env_val and env_val.startswith("AIza") and env_val not in keys:
+            keys.append(env_val)
 
     return keys
 
@@ -663,7 +435,7 @@ def get_active_gemini_key() -> Optional[str]:
     global _gemini_active_idx
     keys = get_gemini_pool_keys()
     if not keys:
-        return get_secret("GEMINI_KEY")
+        return _get_secret_optional("GEMINI_KEY")
 
     now = time.time()
     healthy_keys = [k for k in keys if _gemini_cooldowns.get(k, 0.0) <= now]
@@ -734,13 +506,24 @@ def rotate_gemini_key() -> Optional[str]:
 
 
 def add_gemini_pool_key(key: str) -> str:
-    """Validate and add a new Gemini API key to the key pool in DynamoDB.
+    """Validate a new Gemini API key and direct the operator to GitHub settings.
+
+    Keys can no longer be stored from code. This validates the format
+    and, if the key is already in the pool, returns its assigned name;
+    otherwise it raises telling the operator which repo-secret name
+    to add (``GEMINI_KEY`` if unset, else the next free
+    ``GEMINI_KEY_<n>``).
 
     Args:
         key: Raw Gemini API key (must start with 'AIza')
 
     Returns:
-        The secret name assigned, e.g. 'GEMINI_KEY_2'
+        The secret name assigned, e.g. 'GEMINI_KEY_2' (only when the
+        key is already configured).
+
+    Raises:
+        ValueError: If the key format is invalid.
+        RuntimeError: Always for a new key — add it in GitHub repo settings.
     """
     key = key.strip()
     if not key.startswith("AIza") or len(key) < 20:
@@ -749,24 +532,26 @@ def add_gemini_pool_key(key: str) -> str:
     existing_keys = get_gemini_pool_keys()
     if key in existing_keys:
         logger.info(f"Key [{mask_secret(key)}] is already present in Gemini pool.")
-        if get_secret("GEMINI_KEY") == key:
+        if _get_secret_optional("GEMINI_KEY") == key:
             return "GEMINI_KEY"
         for i in range(1, 21):
-            if get_secret(f"GEMINI_KEY_{i}") == key:
+            if _get_secret_optional(f"GEMINI_KEY_{i}") == key:
                 return f"GEMINI_KEY_{i}"
 
-    # If GEMINI_KEY is not set yet, store as primary
-    if not get_secret("GEMINI_KEY"):
+    # Key is new: tell the operator exactly which repo-secret name to add.
+    if not _get_secret_optional("GEMINI_KEY"):
         target_name = "GEMINI_KEY"
     else:
         idx = 1
-        while get_secret(f"GEMINI_KEY_{idx}") is not None:
+        while _get_secret_optional(f"GEMINI_KEY_{idx}") is not None:
             idx += 1
         target_name = f"GEMINI_KEY_{idx}"
 
-    set_secret(target_name, key)
-    logger.info(f"Added new Gemini key to pool as '{target_name}' [{mask_secret(key)}]")
-    return target_name
+    raise RuntimeError(
+        f"Cannot add a Gemini key from code — add it as the GitHub repo "
+        f"secret '{target_name}' (Settings -> Secrets and variables -> "
+        "Actions) and re-run. DynamoDB storage was removed 25 Nov 2026."
+    )
 
 
 def get_gemini_pool_status() -> list[dict[str, Any]]:
@@ -782,9 +567,9 @@ def get_gemini_pool_status() -> list[dict[str, Any]]:
         remaining = round(cooldown_exp - now, 1) if in_cooldown else 0.0
 
         secret_name = "GEMINI_KEY"
-        if get_secret("GEMINI_KEY") != k:
+        if _get_secret_optional("GEMINI_KEY") != k:
             for i in range(1, 21):
-                if get_secret(f"GEMINI_KEY_{i}") == k:
+                if _get_secret_optional(f"GEMINI_KEY_{i}") == k:
                     secret_name = f"GEMINI_KEY_{i}"
                     break
 
@@ -798,5 +583,3 @@ def get_gemini_pool_status() -> list[dict[str, Any]]:
         })
 
     return status_list
-
-

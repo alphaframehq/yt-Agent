@@ -29,7 +29,7 @@ from typing import Tuple
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from tools.secrets import get_secret
+from tools.secrets import _get_secret_optional
 
 __all__ = [
     "synthesize_speech",
@@ -91,13 +91,13 @@ def synthesize_speech(
         duration = _estimate_or_read_duration(cache_path, text)
         return str(cache_path.resolve()), duration
 
-    aws_key = get_secret("AWS_ACCESS_KEY_ID")
-    aws_secret = get_secret("AWS_SECRET_ACCESS_KEY")
+    aws_key = _get_secret_optional("AWS_ACCESS_KEY_ID")
+    aws_secret = _get_secret_optional("AWS_SECRET_ACCESS_KEY")
     if not aws_key or not aws_secret:
         raise RuntimeError(
             "AWS Polly credentials are not configured: "
             "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are missing. "
-            "Set them (via the secrets store / environment) — silent "
+            "Set them (as GitHub repo secrets / env vars) — silent "
             "stub audio is no longer generated as a fallback."
         )
     ssml_text = format_ssml(text)
