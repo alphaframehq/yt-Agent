@@ -50,9 +50,9 @@ class TestPhase2Tools(unittest.TestCase):
 
     def test_llm_provider_initialization(self):
         """Verify LLM provider instances initialize correctly."""
-        p1 = LLMProvider("gemini", "gemini-2.0-flash")
+        p1 = LLMProvider("gemini", "gemini-3.8-flash")
         self.assertEqual(p1.provider, "gemini")
-        self.assertEqual(p1.model, "gemini-2.0-flash")
+        self.assertEqual(p1.model, "gemini-3.8-flash")
 
         p2 = LLMProvider("bedrock", "claude-3-5-haiku")
         self.assertEqual(p2.provider, "bedrock")
@@ -61,7 +61,7 @@ class TestPhase2Tools(unittest.TestCase):
         """Without a Gemini key, the provider must raise instead of
         returning a fake '{}' success (which used to short-circuit the
         OpenRouter fallback)."""
-        provider = LLMProvider("gemini", "gemini-2.0-flash")
+        provider = LLMProvider("gemini", "gemini-3.8-flash")
         with self.assertRaises(Exception):
             provider.call("You are a test assistant.", "test prompt")
 

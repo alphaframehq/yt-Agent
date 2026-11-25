@@ -66,9 +66,9 @@ def _build_grounding_context() -> str:
     """Collect real-time factual state to eliminate LLM hallucinations."""
     branding = get_channel_branding()
     models = get_config("active_models") or {
-        "research": "gemini/gemini-2.0-flash",
-        "script": "gemini/gemini-2.0-flash",
-        "verify": "gemini/gemini-2.0-flash",
+        "research": "gemini/gemini-3.8-flash",
+        "script": "gemini/gemini-3.8-flash",
+        "verify": "gemini/gemini-3.8-flash",
         "image": "gemini/imagen-3.0-generate-001",
     }
     budget = get_config("budget_ai_per_video", 0.45)
@@ -237,8 +237,8 @@ def chat_with_agent(user_id: int | str, user_prompt: str) -> str:
     )
 
     chain = [
-        ["gemini", "gemini-2.0-flash"],
-        ["gemini", "gemini-2.5-flash-lite"],
+        ["gemini", "gemini-3.8-flash"],
+        ["gemini", "gemini-3.5-flash-lite"],
         ["openrouter", "openrouter/free"],
     ]
 

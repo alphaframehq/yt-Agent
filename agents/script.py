@@ -60,7 +60,7 @@ def _llm_chain() -> List[List[str]]:
 
     Prefers an explicit ``script_chain`` config, then the repo's
     ``verify_chain``, then the single configured ``active_models.script``
-    model (``gemini/gemini-2.0-flash`` by default).
+    model (``gemini/gemini-3.8-flash`` by default).
     """
     for key in ("script_chain", "verify_chain"):
         try:
@@ -69,13 +69,13 @@ def _llm_chain() -> List[List[str]]:
             chain = None
         if chain:
             return [[str(p), str(m)] for p, m in chain]
-    model = "gemini/gemini-2.0-flash"
+    model = "gemini/gemini-3.8-flash"
     try:
         model = get_config("active_models.script") or model
     except Exception:
         pass
     provider, _, name = model.partition("/")
-    return [[provider or "gemini", name or "gemini-2.0-flash"]]
+    return [[provider or "gemini", name or "gemini-3.8-flash"]]
 
 
 def _load_prompt(path: Path) -> str:

@@ -112,7 +112,7 @@ class TestGeminiKeyPool(unittest.TestCase):
 
         mock_post.side_effect = [resp_429, resp_200]
 
-        provider = LLMProvider("gemini", "gemini-2.0-flash")
+        provider = LLMProvider("gemini", "gemini-3.8-flash")
         res = provider.call("system prompt", "user prompt")
 
         self.assertEqual(res.content, "Gemini answer via failover key")

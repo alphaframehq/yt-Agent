@@ -232,7 +232,7 @@ def _generate_gemini_native(prompt: str, dest_path: Path) -> Path:
     response parsing for the native image path exists in the original
     code, so a real call cannot be reconstructed from it. Implement it
     against the documented Gemini native image generation API (e.g. a
-    gemini-2.0-flash image model via generateContent with image output)
+    gemini-3.8-flash image model via generateContent with image output)
     and replace this raise; do not silently return a placeholder.
     """
     raise NotImplementedError(

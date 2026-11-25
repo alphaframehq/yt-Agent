@@ -504,7 +504,7 @@ class VerificationAgent:
         try:
             chain = get_config("verify_chain")
         except Exception:
-            chain = [["gemini", "gemini-2.0-flash"]]
+            chain = [["gemini", "gemini-3.8-flash"]]
 
         try:
             verdict = call_with_fallback(

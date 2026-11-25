@@ -310,7 +310,7 @@ def call_with_fallback(
     schema: Optional[Type[T]] = None,
     max_repair_attempts: int = 2,
 ) -> Any:
-    """Execute LLM call across a fallback chain e.g. [['bedrock', 'claude-3-5-haiku'], ['gemini', 'gemini-2.0-flash']]."""
+    """Execute LLM call across a fallback chain e.g. [['bedrock', 'claude-3-5-haiku'], ['gemini', 'gemini-3.8-flash']]."""
     last_error = None
     for provider_name, model_name in chain:
         try:
