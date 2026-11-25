@@ -15,8 +15,17 @@ from pathlib import Path
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from _fixtures import make_test_bundle, make_test_script
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# The in-memory fake Sheets service backs every Sheets read/write.
 from _sheets_fake import install_fake_sheets
+
+_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
+
+def tearDownModule():
+    _SHEETS_PATCHER.stop()
+
+from _fixtures import make_test_bundle, make_test_script
 from agents.uploader import UploaderAgent, run_upload
 from db.sheets import (
     cache_research,
@@ -56,15 +65,6 @@ class TestStorageAndUploader(unittest.TestCase):
     def setUpClass(cls):
         cls.bundle = make_test_bundle()
         cls.script = make_test_script(cls.bundle)
-
-
-# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
-# The in-memory fake Sheets service backs every Sheets read/write.
-_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
-
-
-def tearDownModule():
-    _SHEETS_PATCHER.stop()
 
     def test_1_sheets_setup_fails_loudly_without_credentials(self):
         """setup_all_sheets() provisions real Google Sheets tabs. In CI
