@@ -277,3 +277,7 @@ All 27 P0 items have a patch. "Covered" means the silent mock / fake success is 
   every rewritten test file also sets them before its own imports, so CI
   passes without the workflow change. `config_manager.py` /
   `tools/secrets.py` read these flags once at import time.
+- **test_storage_uploader test_1 (25 Nov 2026, after CI run #17 failed)** —
+  `setup_all_tables()` provisions real DynamoDB tables and raises
+  RuntimeError without AWS credentials; the rewritten test wrongly
+  asserted a success dict in CI. It now asserts the fail-loud raise.

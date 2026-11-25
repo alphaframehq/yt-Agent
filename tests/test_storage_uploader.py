@@ -59,10 +59,13 @@ class TestStorageAndUploader(unittest.TestCase):
         cls.bundle = make_test_bundle()
         cls.script = make_test_script(cls.bundle)
 
-    def test_1_dynamo_table_setup_call(self):
-        """Verify setup_all_tables executes cleanly without crashing."""
-        res = setup_all_tables()
-        self.assertIn("status", res)
+    def test_1_dynamo_table_setup_fails_loudly_without_aws(self):
+        """setup_all_tables() provisions real DynamoDB tables. In CI
+        there are no AWS credentials, so it must raise RuntimeError
+        instead of reporting success while creating nothing (the old
+        test asserted a fake success dict)."""
+        with self.assertRaises(RuntimeError):
+            setup_all_tables()
 
     def test_2_dynamo_video_record_crud(self):
         """Verify save, get, and update status on yt_videos."""
