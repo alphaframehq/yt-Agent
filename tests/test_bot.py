@@ -11,15 +11,19 @@ import sys
 import unittest
 from pathlib import Path
 
-# Module-level: config_manager.py / tools/secrets.py read
-# ALLOW_IN_MEMORY_* once at import time. unittest discover imports
-# test_bot.py first (alphabetical), so setting the flags here — before
-# telegram_bot.bot is imported below — covers every test module.
-os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
-os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
-
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Google Sheets is the data store now (DynamoDB removed 25 Nov 2026).
+# Install the in-memory fake Sheets service before importing the bot
+# so every config/queue/video read in these tests hits the fake.
+from _sheets_fake import install_fake_sheets
+
+_FAKE_SHEETS, _SHEETS_PATCHER = install_fake_sheets()
+
+
+def tearDownModule():
+    _SHEETS_PATCHER.stop()
 
 from telegram_bot.bot import check_admin_auth, handle_callback_query, handle_command
 from telegram_bot.codespace import handle_codespace_command
@@ -34,12 +38,9 @@ class TestTelegramBot(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        os.environ["MASTER_SECRET"] = "tubepilot-master-secret-key-32-chars-long!"
         os.environ["TELEGRAM_ADMIN_ID"] = "12345"
-        # Explicit in-memory dev mode for CI (no DynamoDB in CI). The
-        # patched config/secrets modules raise without these flags.
-        os.environ["ALLOW_IN_MEMORY_CONFIG"] = "1"
-        os.environ["ALLOW_IN_MEMORY_SECRETS"] = "1"
+        # CI has no Google Sheets: the fake Sheets service installed
+        # at module import time backs every config/queue/video read.
 
     def test_1_ping_command_returns_health_under_5_seconds(self):
         """Verify /ping returns comprehensive health in < 5 seconds."""
@@ -51,16 +52,22 @@ class TestTelegramBot(unittest.TestCase):
 
     def test_2_keys_command_security_and_masking(self):
         """Verify /keys commands mask output and set command requests auto-delete."""
-        # /keys set (must set delete_msg=True for opsec)
+        # /keys set can no longer store secrets — it must direct the
+        # operator to GitHub repo settings (and auto-delete the message
+        # because it contains a secret value).
         res_set = handle_command(user_id=12345, command="keys", args=["set", "GEMINI_KEY", "AIzaSySecretSampleKey123456789"])
         self.assertTrue(res_set["delete_msg"])
-        self.assertIn("Secret `GEMINI_KEY` stored", res_set["text"])
+        self.assertIn("GitHub", res_set["text"])
 
-        # /keys list (must mask output)
-        res_list = handle_command(user_id=12345, command="keys", args=["list"])
-        self.assertIn("GEMINI_KEY", res_list["text"])
-        self.assertIn("AIzaSy", res_list["text"])
-        self.assertIn("6789", res_list["text"])
+        # /keys list (must mask output) — GEMINI_KEY is set in env here.
+        os.environ["GEMINI_KEY"] = "AIzaSySecretSampleKey123456789"
+        try:
+            res_list = handle_command(user_id=12345, command="keys", args=["list"])
+            self.assertIn("GEMINI_KEY", res_list["text"])
+            self.assertIn("AIzaSy", res_list["text"])
+            self.assertIn("6789", res_list["text"])
+        finally:
+            del os.environ["GEMINI_KEY"]
 
     def test_3_model_control_commands(self):
         """Verify /model command switches active models dynamically."""

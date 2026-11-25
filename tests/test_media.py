@@ -15,9 +15,6 @@ from pathlib import Path
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
-os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
-
 from _fixtures import make_test_bundle, make_test_script
 from agents.charts import generate_chart_by_type, revenue_trend
 from agents.visuals import VisualBudgetTracker, research_bundle_to_chart_data

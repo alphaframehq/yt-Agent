@@ -20,14 +20,11 @@ from scripts.notify import send_telegram_notification
 from scripts.notify_failure import notify_pipeline_failure
 from scripts.notify_success import notify_pipeline_success
 from scripts.dev_run import main as dev_run_main, _is_in_codespace, _stop_current_codespace
-from tools.secrets import set_secret
 
 
 class TestSystemIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["MASTER_SECRET"] = "integration_test_master_secret_tube_pilot_9999"
-        os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
         os.environ["TELEGRAM_BOT_TOKEN"] = "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
         os.environ["TELEGRAM_ADMIN_ID"] = "987654321"
 

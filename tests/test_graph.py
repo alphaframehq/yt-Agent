@@ -24,9 +24,6 @@ from unittest.mock import patch
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("ALLOW_IN_MEMORY_CONFIG", "1")
-os.environ.setdefault("ALLOW_IN_MEMORY_SECRETS", "1")
-
 from _fixtures import make_test_bundle, make_test_script
 from orchestration.graph import PipelineState, TubePilotGraph
 from pipeline import run_pipeline, run_stage
