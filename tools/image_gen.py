@@ -1,4 +1,7 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 — Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
+# Applied via PR #1 (fix/production-mocks), 2026-11-25; Agnes wiring
+# added via PR feat/agnes-media (25 Nov 2026).
+# This file = the PR #1-patched tools/image_gen.py PLUS Agnes wiring
+# (the only changes vs that version are marked "AGNES WIRING").
 # Source: alphaframehq/yt-Agent @ main c39f42541b8e784dcf41c09583dc57227be07667
 # Fixes audit P0 #9/#10: generate_image() now RAISES the original error on
 # any Imagen/Gemini/FLUX failure instead of returning a Pillow branded card
@@ -7,6 +10,12 @@
 # native image API call, so it raises NotImplementedError (see below).
 # Placeholders exist only behind an explicit ALLOW_DEMO_MODE env flag
 # (default off), and a failed placeholder never touches a 0-byte file.
+# AGNES WIRING (25 Nov 2026): generate_image() can now use Agnes AI
+# (agnes-image-2.5-flash, free Angel Trial $0 — expiry/limit unverified)
+# when the caller passes model="agnes/..." OR when AGNES_API_KEY is set
+# and AGNES_AS_DEFAULT_IMAGE_PROVIDER=1. Agnes failures raise exactly
+# like Imagen/FLUX failures. No Pillow placeholder on the success path.
+# See tools/agnes_ai.py (new file, same patch set) for the client.
 """Image generation module for TubePilot AI.
 
 Supports:
@@ -98,6 +107,13 @@ def generate_image(
 
     logger.info(f"Generating image with model '{model}' for prompt: {prompt[:60]}...")
 
+    # AGNES WIRING: explicit "agnes/..." model, or Agnes as the
+    # configured default (AGNES_API_KEY set + AGNES_AS_DEFAULT_IMAGE_PROVIDER=1).
+    # Otherwise fall through to the existing Imagen / Gemini / FLUX paths.
+    if "agnes" in model or _agnes_as_default():
+        img_path = _generate_agnes(optimized_prompt, cache_path, aspect_ratio)
+        return str(img_path.resolve())
+
     # 2. Try primary: Imagen 3 / Gemini / FLUX. Any failure propagates
     # as the original error — there is no silent placeholder fallback.
     if "imagen-3" in model:
@@ -111,6 +127,40 @@ def generate_image(
         return str(img_path.resolve())
     else:
         raise ValueError(f"Unknown image model '{model}': no provider implemented for it.")
+
+def _agnes_as_default() -> bool:
+    """True only when the operator explicitly made Agnes the default
+    image provider AND a key is configured. Default off — without this
+    flag, Agnes is used only for an explicit model="agnes/..." call,
+    so existing Imagen/FLUX callers are unaffected."""
+    if os.environ.get("AGNES_AS_DEFAULT_IMAGE_PROVIDER", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return False
+    try:
+        from tools.secrets import get_secret as _get_secret
+
+        return bool(_get_secret("AGNES_API_KEY") or os.environ.get("AGNES_API_KEY"))
+    except Exception:
+        return bool(os.environ.get("AGNES_API_KEY"))
+
+
+def _generate_agnes(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") -> Path:
+    """Call Agnes AI agnes-image-2.5-flash (see tools/agnes_ai.py).
+
+    Raises the original Agnes error on any failure — no Pillow
+    placeholder, no 0-byte file. A missing AGNES_API_KEY raises
+    ValueError from the client, which is the correct fail-loud
+    behaviour (do not fall through to Imagen here: the caller
+    explicitly asked for Agnes).
+    """
+    from tools.agnes_ai import generate_image_agnes
+
+    return generate_image_agnes(prompt, dest_path, aspect_ratio=aspect_ratio)
+
 
 def _generate_imagen3(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") -> Path:
     """Call Google Gemini Imagen 3 API with key pool failover."""
