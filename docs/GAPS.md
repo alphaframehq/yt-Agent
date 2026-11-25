@@ -6,9 +6,9 @@
 
 ## P0 — Must fix before any production run
 
-### 1. YouTube OAuth2 — IMPLEMENTED in code (PR #3), live verification still required
+### 1. YouTube OAuth2 — IMPLEMENTED in code (PR #4), live verification still required
 - **File:** `tools/youtube_api.py::_get_youtube_service()`
-- **State:** implemented 25 Nov 2026 (PR #3, branch `feat/youtube-oauth2`).
+- **State:** implemented 25 Nov 2026 (PR #4, branch `feat/youtube-oauth2`).
   It builds real `google.oauth2.credentials.Credentials` from
   `YT_CLIENT_ID` + `YT_CLIENT_SECRET` + `YT_REFRESH_TOKEN`, refreshes
   the access token, and passes `credentials=...` (never `developerKey`)
@@ -25,7 +25,7 @@
 - **What is still missing — NOT production-ready until done:** a real
   private-upload end-to-end test (SETUP.md §9 step 6): one successful
   private upload observed, and one failing run observed failing loudly.
-  No video was uploaded by PR #3 itself.
+  No video was uploaded by PR #4 itself.
 - **Token storage: done + verified 25 Nov 2026.** `YT_CLIENT_ID` /
   `YT_CLIENT_SECRET` / `YT_REFRESH_TOKEN` are stored as GitHub
   Codespaces secrets and in the Codespace `.env`; verified three ways
@@ -256,7 +256,7 @@ Do not push anything from this folder until you have pulled the merged
 1. Confirm on `main`: PR #1 merged (`8212f762`), PR #2 merged
    (`d71e15e8`), CI green, `agent_chat.py` INTENT 2 still unpatched —
    that is a known next fix, not a regression. OAuth2 is implemented
-   on branch `feat/youtube-oauth2` (PR #3, unmerged at the time this
+   on branch `feat/youtube-oauth2` (PR #4, unmerged at the time this
    was written) — confirm it merges and CI stays green.
 2. Verify the three YT Codespaces secrets exist (fresh GitHub sudo code
    will be needed — the 12:13 IST code has expired). Re-issue the
@@ -272,7 +272,7 @@ Do not push anything from this folder until you have pulled the merged
 4. Verify the Agnes API details in gap #3 against the live docs, fix
    `agnes_ai.py` if the docs differ, then run SETUP.md §9 steps 4–5
    (real image + real video clip, usage page check).
-5. (Done as PR #3, `feat/youtube-oauth2` — OAuth2 was kept on its own
+5. (Done as PR #4, `feat/youtube-oauth2` — OAuth2 was kept on its own
    branch, not bundled into the Agnes PR.)
 6. After OAuth2 merges: one full end-to-end run, private upload only,
    observed succeeding; and one failing run (e.g. bad topic) observed

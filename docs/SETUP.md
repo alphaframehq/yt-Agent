@@ -80,12 +80,12 @@ new one and verify before deleting anything.
 5. Generate a refresh token with those credentials (OAuth Playground,
    `https://developers.google.com/oauthplayground`) with the two scopes
    above. The repo has no token-*generation* flow — it only *uses* a
-   stored refresh token (PR #3). Verify it works:
+   stored refresh token (PR #4). Verify it works:
    `channels.list mine=true` must return your channel.
 6. Store the three values as GitHub Codespaces secrets (see §7) —
    **never** in a file in the repo, and never in chat.
 
-### 1c. OAuth2 in code — IMPLEMENTED (PR #3, 25 Nov 2026), live test still required
+### 1c. OAuth2 in code — IMPLEMENTED (PR #4, 25 Nov 2026), live test still required
 
 Real OAuth2 is now implemented in `tools/youtube_api.py::
 _get_youtube_service()` — it builds
@@ -102,7 +102,7 @@ API, with the title taken from the script bundle (no invented default).
 end-to-end test is still REQUIRED before enabling the daily cron
 (§9 step 6): one successful private upload observed, plus one failing
 run observed failing loudly. See `docs/GAPS.md` #1. No video was
-uploaded by PR #3 itself.
+uploaded by PR #4 itself.
 
 ## 2. LLM — Gemini (free, primary) + OpenRouter (fallback). NO Bedrock.
 

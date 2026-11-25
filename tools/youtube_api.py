@@ -1,4 +1,4 @@
-# OAuth2 implementation — 2026-11-25 — PR #3 (branch feat/youtube-oauth2).
+# OAuth2 implementation — 2026-11-25 — PR #4 (branch feat/youtube-oauth2).
 # Source: alphaframehq/yt-Agent @ main 35d2ee904d8572e1cc4d5acd58cc0ebb8807e743
 # (PR #1 merged 8212f762 + PR #2 merged d71e15e8 + ci.yml 35d2ee9).
 # Closes audit P0 #13/#14/#15 and docs/GAPS.md #1:

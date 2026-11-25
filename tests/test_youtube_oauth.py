@@ -1,6 +1,6 @@
 """Unit tests for real YouTube OAuth2 in tools/youtube_api.py.
 
-2026-11-25 (PR #3, feat/youtube-oauth2): _get_youtube_service() no
+2026-11-25 (PR #4, feat/youtube-oauth2): _get_youtube_service() no
 longer raises "OAuth2 not implemented" — it builds real OAuth2 user
 credentials from YT_CLIENT_ID + YT_CLIENT_SECRET + YT_REFRESH_TOKEN
 and refreshes the access token. These tests assert the new behaviour:
