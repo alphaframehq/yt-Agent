@@ -1,0 +1,85 @@
+{
+  "generated_at_utc": "2026-11-25T12:35:44.839072+00:00",
+  "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
+  "tabs": {
+    "yt_videos": {
+      "count": 0,
+      "rows": []
+    },
+    "yt_research_cache": {
+      "count": 0,
+      "rows": []
+    },
+    "yt_verification_log": {
+      "count": 0,
+      "rows": []
+    },
+    "yt_pipeline_runs": {
+      "count": 0,
+      "rows": []
+    },
+    "yt_config": {
+      "count": 0,
+      "rows": []
+    },
+    "yt_bot_requests": {
+      "count": 2,
+      "rows": [
+        {
+          "request_id": "req_820fd487",
+          "type": "run_pipeline",
+          "inputs_json": {
+            "topic": "best poses for sex",
+            "pillar": "finance_to_technical",
+            "topic_id": "top_a63e07a2"
+          },
+          "status": "pending",
+          "requested_at": "1795603733",
+          "ttl": "1796208533"
+        },
+        {
+          "request_id": "req_e1db5d9e",
+          "type": "run_pipeline",
+          "inputs_json": {
+            "topic": "best poses for sex",
+            "pillar": "finance_to_technical",
+            "topic_id": "top_a63e07a2"
+          },
+          "status": "pending",
+          "requested_at": "1795604551",
+          "ttl": "1796209351"
+        }
+      ]
+    },
+    "yt_topics_queue": {
+      "count": 1,
+      "rows": [
+        {
+          "topic_id": "top_a63e07a2",
+          "topic": "best poses for sex",
+          "pillar": "finance_to_technical",
+          "status": "pending",
+          "priority": "10",
+          "added_at": "1795604550"
+        }
+      ]
+    },
+    "yt_insights": {
+      "count": 0,
+      "rows": []
+    }
+  },
+  "summary": {
+    "videos_total": 0,
+    "videos_by_status": {},
+    "queue_total": 1,
+    "queue_by_status": {
+      "pending": 1
+    },
+    "pending_requests": 2,
+    "requests_total": 2,
+    "pipeline_runs_total": 0,
+    "config_keys": [],
+    "active_models": null
+  }
+}
