@@ -1,4 +1,4 @@
-# LOCAL PRODUCTION PATCH — 2026-11-25 — NOT pushed to GitHub.
+# LOCAL PRODUCTION PATCH — 2026-11-25 — Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # Source: alphaframehq/yt-Agent @ main c39f42541b8e784dcf41c09583dc57227be07667
 # Fixes audit P0 #11 (listed as #12 in the task slice): _render_composition()
 # now RAISES the MoviePy/FFmpeg rendering error instead of writing a
@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from agents.tts import synthesize_script_audio
-from agents.visuals import resolve_scene_visuals
+from agents.visuals import research_bundle_to_chart_data, resolve_scene_visuals
 from models.script import ShortsScript, VideoScript
 from tools.pixabay import download_media, search_background_music
 
@@ -82,12 +82,18 @@ class VideoAssembler:
         self,
         script: VideoScript | ShortsScript,
         output_filename: Optional[str] = None,
+        bundle_data: Optional[Any] = None,
     ) -> str:
         """Compose all scenes, attach audio, background music, burned subtitles, and render MP4.
 
         NOTE: "burned subtitles" in this docstring is aspirational — the
         SRT file is generated (step 4) but is NOT burned into the rendered
         video by _render_composition() (no subtitles filter is applied).
+
+        bundle_data: a ResearchBundle, or a chart-data dict as built by
+        research_bundle_to_chart_data(). Chart scenes REQUIRE it — if it
+        is None, generate_chart_by_type() raises instead of plotting
+        fabricated data. Non-chart scenes do not need it.
         """
         title_str = getattr(script, "topic", getattr(script.seo, "title", "video"))
         dest_name = output_filename or f"render_{'shorts_' if self.is_shorts else 'long_'}{title_str.lower().replace(' ', '_')[:20]}.mp4"
@@ -98,8 +104,10 @@ class VideoAssembler:
         # 1. Synthesize audio per scene
         audio_assets = synthesize_script_audio(script)
 
-        # 2. Resolve visuals per scene
-        visual_assets = resolve_scene_visuals(script)
+        # 2. Resolve visuals per scene — with real research data for charts.
+        if bundle_data is not None and not isinstance(bundle_data, dict):
+            bundle_data = research_bundle_to_chart_data(bundle_data)
+        visual_assets = resolve_scene_visuals(script, bundle_data=bundle_data)
 
         # 3. Locate background music
         bg_tracks = search_background_music()
@@ -248,11 +256,16 @@ class VideoAssembler:
         return str(demo_path.resolve())
 
 
-def assemble_video(script: VideoScript, output_filename: Optional[str] = None) -> str:
-    """High-level function to assemble a longform 16:9 documentary."""
-    return VideoAssembler(is_shorts=False).assemble(script, output_filename)
+def assemble_video(script: VideoScript, output_filename: Optional[str] = None, bundle_data: Optional[Any] = None) -> str:
+    """High-level function to assemble a longform 16:9 documentary.
+
+    bundle_data: ResearchBundle (or chart-data dict) for chart scenes —
+    required for chart scenes, otherwise they raise instead of plotting
+    fabricated data.
+    """
+    return VideoAssembler(is_shorts=False).assemble(script, output_filename, bundle_data=bundle_data)
 
 
-def assemble_shorts(shorts_script: ShortsScript, output_filename: Optional[str] = None) -> str:
+def assemble_shorts(shorts_script: ShortsScript, output_filename: Optional[str] = None, bundle_data: Optional[Any] = None) -> str:
     """High-level function to assemble a vertical 9:16 YouTube Short."""
-    return VideoAssembler(is_shorts=True).assemble(shorts_script, output_filename)
+    return VideoAssembler(is_shorts=True).assemble(shorts_script, output_filename, bundle_data=bundle_data)

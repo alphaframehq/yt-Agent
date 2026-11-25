@@ -39,8 +39,77 @@ from tools.pixabay import download_media, search_stock_videos
 __all__ = [
     "VisualBudgetTracker",
     "VisualPipeline",
+    "research_bundle_to_chart_data",
     "resolve_scene_visuals",
 ]
+
+
+def research_bundle_to_chart_data(bundle: Any) -> Dict[str, Any]:
+    """Build the chart-data dict for generate_chart_by_type() from a ResearchBundle.
+
+    Only values actually present in the bundle are included — nothing is
+    invented. Keys with no real source in the bundle are omitted, so a
+    chart that needs them raises ValueError in generate_chart_by_type()
+    instead of plotting fabricated data. In particular:
+    - TAM: if market_data.tam_usd is 0 / missing, it is omitted (the
+      research patch uses 0.0 as an explicit "not retrieved" sentinel —
+      a $0 TAM must never be rendered as a real market size).
+    - market_share_donut "shares": no share source exists in the bundle,
+      so it is omitted; that chart type raises until a real source is wired.
+    - competitor_matrix "metrics": only competitors whose metric is a
+      take-rate are used; other competitor rows carry no take-rate value.
+    """
+    if bundle is None:
+        raise ValueError(
+            "research_bundle_to_chart_data: no ResearchBundle — chart scenes "
+            "cannot be rendered without real research data."
+        )
+    fin = bundle.financials
+    if not fin.revenue_by_year:
+        raise ValueError(
+            "research_bundle_to_chart_data: bundle has no revenue_by_year — "
+            "chart scenes cannot be rendered without real financials."
+        )
+    if not bundle.entities:
+        raise ValueError(
+            "research_bundle_to_chart_data: bundle has no entities — "
+            "chart scenes cannot be rendered without a real company."
+        )
+    company = bundle.entities[0].name
+    years = sorted(fin.revenue_by_year.keys())
+    values = [fin.revenue_by_year[y] for y in years]
+    data: Dict[str, Any] = {
+        "company": company,
+        "years": years,
+        "values": values,
+        "segments": dict(fin.segments),
+        # margin_compare: the main company only — CompetitorInfo rows carry
+        # a single (metric, value) pair, not a gross/operating/net set.
+        "companies": {
+            company: {
+                "gross": fin.margins.gross,
+                "operating": fin.margins.operating,
+                "net": fin.margins.net,
+            }
+        },
+        "current": values[-1],
+        "growth": fin.growth_rate,
+        "margin": fin.margins.operating,
+    }
+    ue = fin.unit_economics or {}
+    for key in ("revenue", "cogs", "gross", "opex", "net"):
+        if key in ue and ue[key] is not None:
+            data[key] = ue[key]
+    market = getattr(bundle, "market_data", None)
+    if market is not None and market.tam_usd:
+        data["tam"] = market.tam_usd
+        data["penetration_pct"] = market.penetration_pct
+    # competitor_matrix is NOT populated: its router key "companies" is
+    # also the margin_compare dict above, and CompetitorInfo rows carry a
+    # single (metric, value) pair, not take-rates. A competitor_matrix
+    # request therefore raises in generate_chart_by_type() until a real
+    # take-rate source is wired — no fabricated matrix.
+    return data
 
 
 class VisualBudgetTracker(BaseModel):

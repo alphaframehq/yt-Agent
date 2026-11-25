@@ -1,7 +1,7 @@
 # LOCAL PRODUCTION PATCH — 2026-11-25
 # Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — orchestration/graph.py
 # Fixes: P0 audit #16/#17 (task #18/#19): node_finalize calls the real uploader, uses the real returned video ID, completed only after confirmed private upload, assembly/upload failure -> failed with error and no video ID, hashlib_sim/yt_priv_ removed; P1: renders all 3 Shorts, visual_spend is the real tracked cost (0.0 if untracked) not 0.09; verify crash is returned as failed, not masked as human_review (Telegram notify TODO left in code).
-# Do NOT push to GitHub from here; apply to the repo manually after review.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # No secrets in this file — env placeholders / env-var names only.
 
 """LangGraph pipeline orchestration for TubePilot AI.
@@ -214,7 +214,16 @@ class TubePilotGraph:
             from agents.assemble import assemble_video, assemble_shorts
             from agents.uploader import run_upload
 
-            video_path = assemble_video(state.script)
+            # The ResearchBundle is threaded through to assembly so chart
+            # scenes get real data. If it is missing, chart scenes raise
+            # in generate_chart_by_type() instead of plotting fabricated
+            # data (non-chart scenes do not need it).
+            if not state.research:
+                raise RuntimeError(
+                    "Refusing to finalize: no ResearchBundle available to "
+                    "build chart data from."
+                )
+            video_path = assemble_video(state.script, bundle_data=state.research)
             logger.info(f"Longform video assembled at: {video_path}")
             state.rendered_video_path = video_path
 
@@ -223,7 +232,7 @@ class TubePilotGraph:
             if state.research:
                 shorts_list = self.script_agent.generate_shorts(state.research, count=3)
                 for short_script in shorts_list:
-                    shorts_path = assemble_shorts(short_script)
+                    shorts_path = assemble_shorts(short_script, bundle_data=state.research)
                     logger.info(f"Shorts video assembled at: {shorts_path}")
                     shorts_paths.append(shorts_path)
             state.rendered_shorts_paths = shorts_paths
