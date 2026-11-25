@@ -1,7 +1,7 @@
 # LOCAL PRODUCTION PATCH — 2026-11-25
 # Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — pipeline.py
 # Fixes: P0 audit #18 (task #20): PipelineResult/run_pipeline default to verification_overall='not_run' and verification_confidence=0.0 when no VerificationReport exists, instead of 'pass'/1.0.
-# Do NOT push to GitHub from here; apply to the repo manually after review.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # No secrets in this file — env placeholders / env-var names only.
 
 """Main Pipeline execution wrapper for TubePilot AI.

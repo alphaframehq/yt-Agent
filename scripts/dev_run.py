@@ -1,7 +1,7 @@
 # LOCAL PRODUCTION PATCH — 2026-11-25
 # Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — scripts/dev_run.py
 # Fixes: P0 audit #27 (task #27 cron): scheduled daily run (--scheduled) with an empty DynamoDB queue exits with 'queue empty, nothing to run' (exit 0) instead of defaulting to 'How Stripe Makes Money'; the default topic is used only with explicit --allow-default-topic; hardcoded success-notify values removed — duration from script.meta.estimated_duration_sec, spend from the real pipeline result, shorts_count from actually rendered Shorts (unknown = 0.0, never 600.0/0.09/3).
-# Do NOT push to GitHub from here; apply to the repo manually after review.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # No secrets in this file — env placeholders / env-var names only.
 
 """TubePilot AI — Developer & Codespace Execution Runner

@@ -1,7 +1,7 @@
 # LOCAL PRODUCTION PATCH — 2026-11-25
 # Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — db/setup_dynamo.py
 # Fixes: P0 audit #25 (task #27): hardcoded region_name='us-east-1' removed; region is the single env var AWS_REGION (from .env.example) with no hardcoded fallback — missing AWS_REGION raises; boto3 missing / client failure / table-create failure / TTL failure / any table missing afterwards all raise instead of returning skipped/failed dicts.
-# Do NOT push to GitHub from here; apply to the repo manually after review.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # No secrets in this file — env placeholders / env-var names only.
 
 """DynamoDB 7-Table Provisioned Setup Script for TubePilot AI.

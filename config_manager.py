@@ -1,7 +1,7 @@
 # LOCAL PRODUCTION PATCH — 2026-11-25
 # Source: alphaframehq/yt-Agent main @ c39f42541b8e784dcf41c09583dc57227be07667 — config_manager.py
 # Fixes: P0 audit #25 (region) + P1 #10 (task #27 partial): DynamoDB unavailable raises in production; in-memory fallback only with explicit ALLOW_IN_MEMORY_CONFIG=1 (default off); set_config write failures raise instead of logging 'updated'; validate_config() checks required active_models/budget/verify_chain at snapshot_config() startup; region from single env var AWS_REGION, no hardcoded region.
-# Do NOT push to GitHub from here; apply to the repo manually after review.
+# Applied via PR #1 (branch fix/production-mocks), 2026-11-25.
 # No secrets in this file — env placeholders / env-var names only.
 
 """
