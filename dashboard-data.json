@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-11-26T18:46:58.758188+00:00",
+  "generated_at_utc": "2026-11-26T19:55:27.451129+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
@@ -15,7 +15,7 @@
       "rows": []
     },
     "yt_pipeline_runs": {
-      "count": 8,
+      "count": 9,
       "rows": [
         {
           "run_id": "run_850f5966",
@@ -133,6 +133,22 @@
           "run_id": "run_5bb06077",
           "started_at": "1795718159",
           "ttl": "1803494159",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "failed",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
+        },
+        {
+          "run_id": "run_cc7d3c7f",
+          "started_at": "1795722800",
+          "ttl": "1803498800",
           "extra_json": {
             "kind": "daily_run",
             "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
@@ -660,18 +676,19 @@
           "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
           "pillar": "ai_everything",
           "angles_json": [
-            "Trending now: Tracking Diseases Cured by AI — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
-            "Trending now: CTO of 'RansomwareHelp' Indicted for Wire Fraud — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
-            "Trending now: The New York Times warns photographers not to update Photoshop over AI features — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
-            "Trending now: Discovery of curse ritual in trash dump surprises Egyptologist — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
-            "Trending now: GPT-6.2 Astra is the first model to beat Googlers' code golf records — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter"
+            "Trending now: The choices we make about AI now are critical | Bill Gates - Gates Notes — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "Trending now: Top Fed official warns AI bots could pull money out of banks faster than regulators can step in. Keep your savings safe - Yahoo Finance — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "Trending now: Take a Cybercab to Elon's $320 Trillion Wealth Prediction - MarketWise — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "Trending now: What if a few AI companies end up with all the money and power? - Noahpinion — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "Trending now: McKinsey Technology Trends Outlook 2026 - McKinsey & Company — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter"
           ],
           "sources_json": [
+            "google_news",
             "hacker_news",
             "techmeme",
             "bing_news"
           ],
-          "fetched_at": "1795717561"
+          "fetched_at": "1795722818"
         }
       ]
     },
@@ -689,7 +706,7 @@
     },
     "pending_requests": 0,
     "requests_total": 0,
-    "pipeline_runs_total": 8,
+    "pipeline_runs_total": 9,
     "config_keys": [],
     "active_models": null
   }
