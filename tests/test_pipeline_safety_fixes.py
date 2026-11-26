@@ -421,5 +421,113 @@ class TestYoutubeTransientRetry(unittest.TestCase):
             self.assertFalse(_is_transient_youtube_error(Exception(msg)), msg)
 
 
+class TestDailyRunQueueLoop(unittest.TestCase):
+    """daily_run must skip poisoned topics like dev_run does (run #13).
+
+    The scheduled daily entry point is scripts/daily_run.py, not
+    dev_run.py: a rejected topic used to fail the whole day (exit 1)
+    instead of being marked failed and skipped. These tests drive
+    daily main() with the fake Sheets store and a mocked run_daily.
+    """
+
+    def setUp(self):
+        # Reset the queue tab to just its header row (the fake is
+        # pre-provisioned with headers; a bare .clear() would also
+        # wipe the header and the first appended row would be
+        # swallowed as the header).
+        from db.sheets import TAB_HEADERS
+
+        _FAKE_SHEETS.store["yt_topics_queue"] = [
+            list(TAB_HEADERS["yt_topics_queue"])
+        ]
+
+    def tearDown(self):
+        # Leave no rows behind: later test classes append rows with
+        # the same topic_ids (e.g. the run #13 topic) and assume a
+        # clean queue — a leftover "pending" duplicate breaks
+        # update-by-first-match in update_topic_status.
+        self.setUp()
+
+    def _run_daily_main(self, argv):
+        import scripts.daily_run as daily_run
+
+        with patch.object(sys, "argv", argv):
+            with patch.object(daily_run, "notify_pipeline_failure",
+                              return_value=False):
+                return daily_run.main()
+
+    def _ok_summary(self, topic):
+        return {"topic": topic, "pillar": "ai_everything",
+                "long_status": "complete", "long_video_id": "vid_1",
+                "shorts": [], "shorts_summary": {"overall": "skipped"},
+                "error": None, "exit_code": 0}
+
+    def test_run13_topic_only_queue_exits_zero_and_marks_failed(self):
+        # Queue holds ONLY the run #13 topic; the daily run must mark
+        # it failed and then exit 0 on the now-empty queue — never a
+        # research ValueError, never exit 1.
+        import scripts.daily_run as daily_run
+
+        _FAKE_SHEETS.store["yt_topics_queue"].append(
+            _queue_row("top_a63e07a2", "best poses for sex",
+                       pillar="finance_to_technical", priority=10))
+        with patch.object(daily_run, "run_daily",
+                          side_effect=AssertionError("must not run")):
+            code = self._run_daily_main(
+                ["daily_run.py", "--no-trending", "--no-stop", "--scheduled"])
+        self.assertEqual(code, 0)
+        rows = list_topics_queue()
+        self.assertEqual(rows[0]["status"], "failed")
+        self.assertIsNone(get_next_topic())
+
+    def test_bad_topic_skipped_then_good_topic_runs(self):
+        import scripts.daily_run as daily_run
+
+        _FAKE_SHEETS.store["yt_topics_queue"].append(
+            _queue_row("top_a63e07a2", "best poses for sex",
+                       pillar="finance_to_technical", priority=10))
+        _FAKE_SHEETS.store["yt_topics_queue"].append(
+            _queue_row("top_good1", "New AI coding tools launch",
+                       pillar="ai_everything", priority=1))
+        with patch.object(daily_run, "run_daily",
+                          side_effect=lambda **kw: self._ok_summary(kw["topic"])) as run:
+            code = self._run_daily_main(
+                ["daily_run.py", "--no-trending", "--no-stop", "--scheduled"])
+        self.assertEqual(code, 0)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.kwargs["topic"], "New AI coding tools launch")
+        rows = {r["topic_id"]: r for r in list_topics_queue()}
+        self.assertEqual(rows["top_a63e07a2"]["status"], "failed")
+        self.assertEqual(rows["top_good1"]["status"], "running")
+
+    def test_pipeline_topic_failure_marks_failed_then_next_runs(self):
+        # A topic that passes the filter but fails in the pipeline
+        # for a topic-attributable reason (Gemini safety refusal)
+        # must be marked failed and the next topic tried.
+        import scripts.daily_run as daily_run
+
+        _FAKE_SHEETS.store["yt_topics_queue"].append(
+            _queue_row("top_first", "AI agents beat benchmarks",
+                       pillar="ai_everything", priority=5))
+        _FAKE_SHEETS.store["yt_topics_queue"].append(
+            _queue_row("top_second", "New AI coding tools launch",
+                       pillar="ai_everything", priority=1))
+        blocked = {"topic": "AI agents beat benchmarks",
+                   "pillar": "ai_everything", "long_status": "failed",
+                   "long_video_id": None, "shorts": [],
+                   "shorts_summary": {"overall": "skipped"},
+                   "error": "prompt was blocked by safety filter",
+                   "exit_code": 1}
+        with patch.object(daily_run, "run_daily",
+                          side_effect=[blocked, self._ok_summary("New AI coding tools launch")]) as run:
+            code = self._run_daily_main(
+                ["daily_run.py", "--no-trending", "--no-stop", "--scheduled"])
+        self.assertEqual(code, 0)
+        self.assertEqual(run.call_count, 2)
+        rows = {r["topic_id"]: r for r in list_topics_queue()}
+        self.assertEqual(rows["top_first"]["status"], "failed")
+        self.assertEqual(rows["top_second"]["status"], "running")
+
+
 if __name__ == "__main__":
     unittest.main()

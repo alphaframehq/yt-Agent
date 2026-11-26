@@ -18,10 +18,13 @@ Flow (``scripts/dev_run.py`` topic resolution, unchanged):
    and preferred over the stale base queue — the queued 60 topics
    stay as the base queue and are the fallback. Otherwise the topic
    is dequeued from the Google Sheets queue (``yt_topics_queue``).
-   With ``--scheduled`` and an empty queue (and no strong trend),
-   exits 0 with "queue empty, nothing to run" — never a default
-   topic. A default topic is used only with explicit
-   ``--allow-default-topic`` (local dev).
+   A dequeued topic is checked with the topic-safety/niche filter
+   first: a rejected topic is marked ``failed`` in the Sheet and
+   the next queued topic is tried (up to 5 per run), so one
+   poisoned row can never fail the whole day. With ``--scheduled``
+   and an empty queue (and no strong trend), exits 0 with "queue
+   empty, nothing to run" — never a default topic. A default topic
+   is used only with explicit ``--allow-default-topic`` (local dev).
 2. The long pipeline runs via ``orchestration.graph.run_pipeline``
    (research, trends, script, verify, finalize). The trend step is
    non-fatal; a trends failure never blocks the long video.
@@ -75,6 +78,11 @@ from db.sheets import (
     save_trend_report,
 )
 from orchestration.graph import run_pipeline
+from scripts.dev_run import (
+    _MAX_TOPICS_PER_RUN,
+    _is_topic_failure,
+    _mark_topic_failed,
+)
 from scripts.notify_success import notify_pipeline_success
 from scripts.notify_failure import notify_pipeline_failure
 from tools.topic_filter import check_topic
@@ -180,21 +188,68 @@ def _prefer_trending_topic(args: argparse.Namespace) -> Optional[str]:
     return topic
 
 
-def _resolve_topic(args: argparse.Namespace) -> Optional[str]:
-    """Resolve the day's topic (same rules as scripts/dev_run.py).
+_UNSET = object()
 
-    Returns the topic, or None when a scheduled run has an empty
-    queue (caller exits 0). Raises SystemExit(2) when no topic can
-    be resolved for a non-scheduled run.
+
+def _resolve_queued_topic(
+    args: argparse.Namespace, trending: object = _UNSET
+) -> Optional[tuple]:
+    """Resolve the next usable queued topic.
+
+    Returns ``(topic, pillar, topic_id)`` or None when a scheduled
+    run has an empty queue (caller exits 0). Raises SystemExit(2)
+    when no topic can be resolved for a non-scheduled run, and
+    SystemExit(1) when every dequeued topic was rejected by the
+    topic filter (all are marked failed, so the queue has no usable
+    topic left). Explicit --topic returns immediately with
+    topic_id None (no fall-through to the queue).
+
+    A dequeued topic is checked with the topic-safety/niche filter
+    BEFORE any pipeline work (same gate as scripts/dev_run.py and
+    the pipeline entry): a rejected topic is marked failed in the
+    Sheet and the next queued topic is tried, so one poisoned row
+    (e.g. run #13's 'best poses for sex', priority 10) can never
+    fail the whole day again. ``trending`` is the topic string
+    _prefer_trending_topic already enqueued (or None); pass it in
+    so the picker runs once per run, not once per dequeue attempt.
     """
     if args.topic:
-        return args.topic
-    trending = _prefer_trending_topic(args)
-    queued = dequeue_next_topic()
-    if queued and queued.get("topic"):
+        return (args.topic, args.pillar, None)
+    if trending is _UNSET:
+        trending = _prefer_trending_topic(args)
+    for _attempt in range(_MAX_TOPICS_PER_RUN):
+        queued = dequeue_next_topic()
+        if not queued or not queued.get("topic"):
+            if args.scheduled:
+                logger.info("queue empty, nothing to run")
+                return None
+            if args.allow_default_topic:
+                logger.info("Queue empty. Explicit dev default topic: 'How Stripe Makes Money'")
+                return ("How Stripe Makes Money", args.pillar, None)
+            logger.error(
+                "No topic supplied and the Google Sheets queue is empty. "
+                "Pass --topic, queue a topic, or use --allow-default-topic "
+                "for an explicit local dev run."
+            )
+            raise SystemExit(2)
         topic = queued.get("topic")
+        q_pillar = queued.get("pillar") or args.pillar
+        if q_pillar not in ("ai_everything", "finance_to_technical", "tech_to_financial"):
+            logger.warning(
+                f"Queued topic has invalid pillar {q_pillar!r}; using '{args.pillar}' instead."
+            )
+            q_pillar = args.pillar
+        topic_id = queued.get("topic_id")
+        allowed, reason = check_topic(topic, q_pillar)
+        if not allowed:
+            logger.warning(
+                f"Skipping queued topic '{topic}' ({reason}) — "
+                "marking failed so it is never dequeued again."
+            )
+            _mark_topic_failed(topic_id)
+            continue
         if trending and topic.strip().lower() == trending.strip().lower():
-            logger.info(f"Dequeued trending topic for today: '{topic}' [{args.pillar}]")
+            logger.info(f"Dequeued trending topic for today: '{topic}' [{q_pillar}]")
         elif trending:
             # A stale higher-priority row won the dequeue over the
             # freshly enqueued trend (e.g. an older trending pick
@@ -209,20 +264,26 @@ def _resolve_topic(args: argparse.Namespace) -> Optional[str]:
                 "running the dequeued topic."
             )
         else:
-            logger.info(f"Dequeued topic from Google Sheets queue: '{topic}' [{queued.get('pillar', args.pillar)}]")
-        return topic
-    if args.scheduled:
-        logger.info("queue empty, nothing to run")
-        return None
-    if args.allow_default_topic:
-        logger.info("Queue empty. Explicit dev default topic: 'How Stripe Makes Money'")
-        return "How Stripe Makes Money"
+            logger.info(f"Dequeued topic from Google Sheets queue: '{topic}' [{q_pillar}]")
+        return (topic, q_pillar, topic_id)
     logger.error(
-        "No topic supplied and the Google Sheets queue is empty. "
-        "Pass --topic, queue a topic, or use --allow-default-topic "
-        "for an explicit local dev run."
+        f"No usable topic after {_MAX_TOPICS_PER_RUN} queued topics "
+        "(all rejected by the topic filter and marked failed)."
     )
-    raise SystemExit(2)
+    raise SystemExit(1)
+
+
+def _resolve_topic(args: argparse.Namespace) -> Optional[str]:
+    """Resolve the day's topic (same rules as scripts/dev_run.py).
+
+    Returns the topic, or None when a scheduled run has an empty
+    queue (caller exits 0). Raises SystemExit(2) when no topic can
+    be resolved for a non-scheduled run. Thin wrapper over
+    _resolve_queued_topic, which also returns the pillar/topic_id
+    the daily loop needs to mark a failed topic.
+    """
+    resolved = _resolve_queued_topic(args)
+    return resolved[0] if resolved is not None else None
 
 
 def run_daily(
@@ -365,11 +426,21 @@ def run_daily(
             f"({shorts_summary['overall']})."
         )
         logger.warning(f"⚠️ {error_msg}")
-        notify_pipeline_failure(
-            stage="daily_run",
-            error_message=error_msg,
-            topic=topic,
-        )
+        if _is_topic_failure(result.get("error")):
+            # Unproduceable topic (safety refusal, off-niche, or
+            # unresearchable): the runner marks it failed and moves
+            # on to the next queued topic — no Telegram alert for a
+            # bad topic (mirrors scripts/dev_run.py).
+            logger.warning(
+                "Long video failed for a topic-attributable reason "
+                f"({result.get('error')}); skipping failure notify."
+            )
+        else:
+            notify_pipeline_failure(
+                stage="daily_run",
+                error_message=error_msg,
+                topic=topic,
+            )
         exit_code = 1
 
     return {
@@ -379,6 +450,11 @@ def run_daily(
         "long_video_id": video_id,
         "shorts": short_results,
         "shorts_summary": shorts_summary,
+        # The failure reason, when the long video did not complete
+        # (used by main() to decide whether the failure is
+        # topic-attributable — mark failed, try the next topic —
+        # or a real run failure to stop on).
+        "error": result.get("error"),
         "exit_code": exit_code,
     }
 
@@ -424,12 +500,37 @@ def main() -> int:
 
     exit_code = 0
     try:
-        topic = _resolve_topic(args)
-        if topic is None:
-            # Scheduled run, empty queue: nothing to do.
-            return 0
-        summary = run_daily(topic=topic, pillar=args.pillar, shorts_count=args.shorts_count)
-        exit_code = summary["exit_code"]
+        if args.topic:
+            # Explicit topic: a single attempt, no fall-through to
+            # the queue (mirrors scripts/dev_run.py).
+            summary = run_daily(topic=args.topic, pillar=args.pillar, shorts_count=args.shorts_count)
+            return summary["exit_code"]
+        trending = _prefer_trending_topic(args)
+        # Queue path: dequeue in a loop until one topic succeeds,
+        # the queue empties, or the per-run cap is hit. A topic
+        # that fails for a topic-attributable reason is marked
+        # failed in the Sheet and skipped; an empty queue exits 0
+        # ("queue empty, nothing to do") — never a default topic,
+        # never a crash, with or without --scheduled.
+        for _attempt in range(_MAX_TOPICS_PER_RUN):
+            resolved = _resolve_queued_topic(args, trending=trending)
+            if resolved is None:
+                # Scheduled run, empty queue: nothing to do.
+                return 0
+            topic, pillar, topic_id = resolved
+            summary = run_daily(topic=topic, pillar=pillar, shorts_count=args.shorts_count)
+            exit_code = summary["exit_code"]
+            if exit_code == 0:
+                return 0
+            if _is_topic_failure(summary.get("error")):
+                _mark_topic_failed(topic_id)
+                continue
+            return exit_code
+        logger.error(
+            f"No topic produced a video after {_MAX_TOPICS_PER_RUN} queued "
+            "topics; failure alerts were sent for the non-topic failures."
+        )
+        return 1
     except SystemExit as e:
         exit_code = int(e.code or 0)
     except Exception as e:
