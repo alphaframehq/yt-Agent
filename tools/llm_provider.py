@@ -40,6 +40,7 @@ __all__ = [
     "LLMProvider",
     "LLMResponse",
     "SafetyBlockedError",
+    "GeminiOverloadedError",
     "call_with_fallback",
 ]
 
@@ -64,6 +65,19 @@ class SafetyBlockedError(ValueError):
     """
 
 
+class GeminiOverloadedError(RuntimeError):
+    """Raised when every Gemini key in the pool fails with a 5xx
+    server error (503 overload, 500/502/504).
+
+    Deliberately a RuntimeError, NOT an httpx error: ``LLMProvider.call``
+    retries httpx errors 3x with tenacity, which would burn minutes
+    re-trying an overloaded backend that already failed on every key.
+    Raising this instead moves the fallback chain to the next provider
+    promptly (run #17: Gemini 503s stalled the chain while OpenRouter
+    was never tried in time).
+    """
+
+
 class LLMResponse(BaseModel):
     """Normalized response from an LLM call."""
     content: str
@@ -72,6 +86,30 @@ class LLMResponse(BaseModel):
     model: str
     tokens_used: int = 0
     latency_ms: int = 0
+
+
+def _summarize_validation_error(exc: Exception) -> str:
+    """Condense a parse/validation failure into the exact fields the
+    LLM must fix, one short line per problem.
+
+    The raw pydantic error dump is verbose (nested context, URLs);
+    a repair re-prompt carrying it verbatim wastes tokens and the
+    model still omits the same fields. This keeps at most 12
+    ``field.path: problem`` lines so the next attempt knows precisely
+    what was missing or invalid.
+    """
+    if isinstance(exc, ValidationError):
+        lines: list[str] = []
+        for err in exc.errors()[:12]:
+            loc = ".".join(str(p) for p in err.get("loc", ())) or "<root>"
+            lines.append(f"- {loc}: {err.get('msg', exc)}")
+        if len(exc.errors()) > 12:
+            lines.append(f"- ... and {len(exc.errors()) - 12} more problems")
+        return "\n".join(lines)
+    text = str(exc)
+    if len(text) > 500:
+        text = text[:500] + "…"
+    return text
 
 
 class LLMProvider:
@@ -128,8 +166,17 @@ class LLMProvider:
                 )
 
             res = self.call(system_prompt, current_prompt, schema=schema)
-            
-            raw_text = res.content.strip()
+
+            raw_text = (res.content or "").strip()
+            if not raw_text:
+                # Empty provider response: a failed attempt, not a
+                # crash — let the fallback chain try the next
+                # provider (run #17: OpenRouter content=None blew up
+                # as a pydantic error on LLMResponse instead).
+                raise ValueError(
+                    f"Provider {self.provider}/{self.model} returned "
+                    "an empty response (no content)."
+                )
             # Clean possible markdown json wrapper
             if raw_text.startswith("```json"):
                 raw_text = raw_text[7:]
@@ -143,7 +190,7 @@ class LLMProvider:
                 data = json.loads(raw_text)
                 return schema.model_validate(data)
             except (json.JSONDecodeError, ValidationError) as e:
-                last_error = str(e)
+                last_error = _summarize_validation_error(e)
                 if attempt == max_repair_attempts:
                     raise
 
@@ -178,6 +225,7 @@ class LLMProvider:
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
         last_err: Optional[Exception] = None
+        server_error_statuses: list[int] = []
         for idx, api_key in enumerate(keys):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={api_key}"
             try:
@@ -198,6 +246,23 @@ class LLMProvider:
                         )
                         mark_gemini_key_failed(api_key, error_status=resp.status_code, cooldown_sec=3600.0)
                         last_err = httpx.HTTPStatusError(f"HTTP {resp.status_code}", request=resp.request, response=resp)
+                        continue
+                    elif resp.status_code in (500, 502, 503, 504):
+                        # Overload / server error (run #17: 503s
+                        # stalled the chain): fail over to the next
+                        # key immediately and record it, so the
+                        # post-loop check can skip tenacity's retry
+                        # entirely when every key is 5xx.
+                        logger.warning(
+                            f"Gemini key [{mask_secret(api_key)}] hit HTTP "
+                            f"{resp.status_code} (server error/overload). "
+                            f"Failing over to next key in pool ({idx + 1}/{len(keys)})..."
+                        )
+                        mark_gemini_key_failed(api_key, error_status=resp.status_code, cooldown_sec=60.0)
+                        server_error_statuses.append(resp.status_code)
+                        last_err = httpx.HTTPStatusError(
+                            f"HTTP {resp.status_code}", request=resp.request, response=resp
+                        )
                         continue
 
                     resp.raise_for_status()
@@ -247,11 +312,25 @@ class LLMProvider:
                     )
             except (httpx.HTTPStatusError, httpx.RequestError) as exc:
                 logger.warning(f"Gemini request failed using key [{mask_secret(api_key)}]: {exc}")
-                mark_gemini_key_failed(api_key, error_status=getattr(getattr(exc, 'response', None), 'status_code', 500))
+                resp_obj = getattr(exc, 'response', None)
+                status = getattr(resp_obj, 'status_code', None)
+                mark_gemini_key_failed(api_key, error_status=status if isinstance(status, int) else 500)
+                if isinstance(status, int) and status >= 500:
+                    server_error_statuses.append(status)
                 last_err = exc
                 continue
 
         if last_err is not None:
+            if server_error_statuses and len(server_error_statuses) >= len(keys):
+                # Every key failed with a 5xx: the backend is down,
+                # not the request — skip tenacity's retry (it would
+                # only re-run the same failing keys) and let the
+                # fallback chain move to the next provider promptly.
+                raise GeminiOverloadedError(
+                    f"Gemini overloaded: all {len(keys)} key(s) failed "
+                    f"with server errors {server_error_statuses} "
+                    f"(model={self.model})."
+                )
             raise last_err
         raise RuntimeError("All Gemini API keys in pool failed.")
 
@@ -345,7 +424,22 @@ class LLMProvider:
             resp = client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            api_error = data.get("error") if isinstance(data, dict) else None
+            if api_error:
+                raise ValueError(f"OpenRouter API error: {api_error}")
+            choices = data.get("choices") or []
+            content = None
+            if choices:
+                content = (choices[0].get("message") or {}).get("content")
+            if not isinstance(content, str) or not content.strip():
+                # Run #17: OpenRouter returned content=None and the
+                # LLMResponse(content=None) pydantic error crashed
+                # the call instead of failing this attempt over to
+                # the next provider in the chain.
+                raise ValueError(
+                    "OpenRouter returned no content (content=None or "
+                    "empty); treating as a failed attempt."
+                )
 
             return LLMResponse(
                 content=content,
