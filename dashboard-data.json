@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-11-26T15:29:26.101538+00:00",
+  "generated_at_utc": "2026-11-26T16:36:42.010044+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
@@ -15,8 +15,73 @@
       "rows": []
     },
     "yt_pipeline_runs": {
-      "count": 0,
-      "rows": []
+      "count": 4,
+      "rows": [
+        {
+          "run_id": "run_850f5966",
+          "started_at": "1795707822",
+          "ttl": "1803483822",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak — Simple Hindi Me",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "skipped",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
+        },
+        {
+          "run_id": "run_9e44c915",
+          "started_at": "1795707838",
+          "ttl": "1803483838",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak — Simple Hindi Me",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "skipped",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
+        },
+        {
+          "run_id": "run_5cb56cee",
+          "started_at": "1795710332",
+          "ttl": "1803486332",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "skipped",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
+        },
+        {
+          "run_id": "run_9d1756b3",
+          "started_at": "1795710349",
+          "ttl": "1803486349",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "skipped",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
+        }
+      ]
     },
     "yt_config": {
       "count": 0,
@@ -541,7 +606,7 @@
     },
     "pending_requests": 0,
     "requests_total": 0,
-    "pipeline_runs_total": 0,
+    "pipeline_runs_total": 4,
     "config_keys": [],
     "active_models": null
   }
