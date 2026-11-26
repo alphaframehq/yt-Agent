@@ -48,6 +48,7 @@ from tools.secrets import (
 
 __all__ = [
     "generate_image",
+    "generate_programmatic_visual",
     "get_cached_image_path",
 ]
 
@@ -199,6 +200,27 @@ def _generate_imagen3(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") 
                     mark_gemini_key_failed(api_key, error_status=resp.status_code, cooldown_sec=3600.0)
                     last_err = httpx.HTTPStatusError(f"HTTP {resp.status_code}", request=resp.request, response=resp)
                     continue
+                elif resp.status_code == 404:
+                    # Run #18: the model endpoint itself is unavailable
+                    # for this account — Imagen 3 is a PAID model and
+                    # the free Gemini key 404s here. Rotating keys
+                    # cannot help (every free key hits the same
+                    # missing model) and marking the key failed would
+                    # poison the text-generation pool for a problem
+                    # that is not the key's fault. Fail fast with a
+                    # clear error; the caller (agents/visuals.py)
+                    # falls back to free stock imagery instead.
+                    logger.error(
+                        "Imagen 3 request failed: HTTP 404 — the model "
+                        "is not served for this Gemini API key "
+                        "(Imagen 3 is a paid model). Not rotating keys."
+                    )
+                    raise RuntimeError(
+                        "Imagen 3 unavailable (HTTP 404): the model is "
+                        "not served for this Gemini API key (Imagen 3 is "
+                        "a paid model). Use the Pixabay / programmatic "
+                        "fallback instead."
+                    )
 
                 resp.raise_for_status()
                 data = resp.json()
@@ -264,6 +286,70 @@ def _generate_flux(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") -> 
             dest_path.write_bytes(resp.content)
             return dest_path
     raise RuntimeError("No output from Replicate FLUX")
+
+
+def generate_programmatic_visual(
+    prompt: str, dest_path: Path, aspect_ratio: str = "16:9"
+) -> Path:
+    """Last-resort production visual: a dark branded title card
+    rendered locally with Pillow (run #18 fix).
+
+    This is NOT a generated image and must never be presented as
+    one: callers log a warning naming the fallback whenever they
+    use it. It exists so a single image-provider failure can never
+    kill finalize — when Imagen 404s (paid model, free key) AND no
+    free stock image is available, the scene still gets a real,
+    renderable visual (the same house style as the diagram /
+    programmatic visuals the pipeline already renders for $0.00).
+    Distinct from the demo-only ``_generate_fallback_graphic``:
+    that one is gated behind ALLOW_DEMO_MODE and stands in for a
+    whole failed generation; this one is an explicit, logged
+    production degradation path. Always writes a real non-empty
+    PNG; raises on any Pillow failure.
+    """
+    from PIL import Image, ImageDraw
+
+    width, height = (720, 1280) if aspect_ratio == "9:16" else (1280, 720)
+    img = Image.new("RGB", (width, height), color=(14, 17, 23))
+    draw = ImageDraw.Draw(img)
+
+    step = 80
+    for y in range(0, height, step):
+        draw.line([(0, y), (width, y)], fill=(30, 36, 48), width=1)
+    for x in range(0, width, step):
+        draw.line([(x, 0), (x, height)], fill=(30, 36, 48), width=1)
+    margin = 60
+    draw.rectangle(
+        [margin, margin, width - margin, height - margin],
+        outline=(0, 212, 170),
+        width=3,
+    )
+    draw.rectangle(
+        [margin + 4, margin + 4, width - margin - 4, height - margin - 4],
+        outline=(255, 107, 107),
+        width=1,
+    )
+
+    # Title lines from the prompt's opening words, wrapped.
+    words = str(prompt or "").split()
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        current.append(word)
+        if len(" ".join(current)) > 32:
+            lines.append(" ".join(current))
+            current = []
+    if current:
+        lines.append(" ".join(current))
+    y = height // 3
+    for line in lines[:5]:
+        draw.text((margin + 30, y), line, fill=(230, 237, 243))
+        y += 44
+    draw.text((margin + 30, height - margin - 40), "TUBEPILOT AI", fill=(0, 212, 170))
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest_path, "PNG")
+    return dest_path
 
 
 def _generate_fallback_graphic(prompt: str, dest_path: Path) -> str:

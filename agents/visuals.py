@@ -16,10 +16,17 @@
 
 Per-scene visual routing governed by hard per-video budget constraint (default $0.30):
 - visual_type == "chart": Matplotlib institutional chart generator ($0.00)
-- visual_type == "stock": Pixabay free stock video -> Imagen 3 fallback (~$0.03)
-- visual_type == "ai_image": Gemini Imagen 3 (~$0.03) -> FLUX Schnell (~$0.01)
-- visual_type == "ai_gen": fal.ai LTX-Video (~$0.05) if budget allows, else Imagen 3 + zoom
-- visual_type == "diagram" / "logo": Clean dark mode programmatic diagrams ($0.00)
+- visual_type == "stock": Pixabay free stock video -> image fallback chain (Imagen 3 $0.03 if affordable, else Pixabay stock image $0.00, else programmatic title card $0.00)
+- visual_type == "ai_image": Gemini Imagen 3 (~$0.03) -> FLUX Schnell (~$0.01) -> free image chain (Pixabay stock image / programmatic card, $0.00)
+- visual_type == "ai_gen": fal.ai LTX-Video (~$0.05) if budget allows, else image fallback chain
+- visual_type == "diagram" / "logo": image fallback chain ($0.00 free sources when the budget is exhausted; Imagen 3 spend is now recorded, not left at 0.0)
+
+Run #18 fix (26 Nov 2026): Imagen 3 404s for the free Gemini key (it is a
+paid model), which killed node_finalize. A single image failure must
+never kill finalize now: every image call goes through
+_image_with_fallback() — Imagen 3, then Pixabay free stock image
+(PIXABAY_KEY is in the workflow env), then a locally rendered
+programmatic title card — with a warning logged at each step down.
 """
 
 from __future__ import annotations
@@ -33,8 +40,12 @@ from agents.charts import AI_CHART_TYPES, FINANCE_CHART_TYPES, generate_chart_by
 from config_manager import get_config
 from models.script import SceneInfo, VideoScript
 from tools.fal_ai import generate_fal_video
-from tools.image_gen import generate_image
-from tools.pixabay import download_media, search_stock_videos
+from tools.image_gen import (
+    generate_image,
+    generate_programmatic_visual,
+    get_cached_image_path,
+)
+from tools.pixabay import download_media, search_stock_images, search_stock_videos
 
 __all__ = [
     "VisualBudgetTracker",
@@ -179,6 +190,74 @@ def _validate_asset(asset_path: Any, scene_id: Any) -> str:
     return asset_path
 
 
+def _image_with_fallback(
+    prompt: str, scene_id: Any, *, allow_paid: bool = True
+) -> tuple[str, float, str]:
+    """Generate a scene image with the run #18 fallback chain.
+
+    1. Imagen 3 (~$0.03) — the normal path, skipped entirely when
+       ``allow_paid`` is False (budget exhausted).
+    2. Pixabay free stock image ($0.00) — the working free source
+       when Imagen 404s / fails. Imagen 3 is a paid model: the free
+       Gemini key cannot serve it, and FLUX needs
+       REPLICATE_API_TOKEN, which the repo does not hold — so Pixabay
+       is the only free image source with a key in the workflow.
+    3. Programmatic title card ($0.00) — a plain branded visual
+       rendered locally; never a fake "generated" image, and the
+       fallback is logged as a warning.
+
+    A single image failure never kills finalize: the chain only
+    raises if even the local programmatic visual cannot be written.
+    Returns ``(asset_path, cost_usd, source)`` where cost is 0.03
+    only when Imagen actually succeeded.
+    """
+    if allow_paid:
+        try:
+            path = generate_image(prompt, model="gemini/imagen-3.0-generate-001")
+            return _validate_asset(path, scene_id), 0.03, "imagen3"
+        except Exception as exc:  # noqa: BLE001 — fall through to the free chain
+            logger.warning(
+                f"Imagen 3 failed for scene {scene_id} ({exc}); "
+                "falling back to Pixabay stock image."
+            )
+    try:
+        images = search_stock_images(query=prompt[:40])
+    except Exception as exc:  # noqa: BLE001 — fall through to programmatic
+        logger.warning(
+            f"Pixabay image search failed for scene {scene_id} ({exc}); "
+            "using programmatic visual."
+        )
+        images = []
+    for hit in images or []:
+        url = hit.get("url")
+        if not url:
+            continue
+        try:
+            path = download_media(url, extension="jpg")
+            # download_media touches a 0-byte file when the download
+            # fails — a 0-byte "asset" would pass _validate_asset
+            # (existence only) and break assembly later, so size is
+            # checked here and a bad hit falls through to the next.
+            if path and Path(path).exists() and Path(path).stat().st_size > 0:
+                return _validate_asset(path, scene_id), 0.0, "pixabay"
+            logger.warning(
+                f"Pixabay download for scene {scene_id} produced an "
+                f"empty file ({path}); trying the next hit."
+            )
+        except Exception as exc:  # noqa: BLE001 — try the next hit
+            logger.warning(
+                f"Pixabay download failed for scene {scene_id} ({exc}); "
+                "trying the next hit."
+            )
+    logger.warning(
+        f"Scene {scene_id}: no stock image available; using "
+        "programmatic title card visual."
+    )
+    prog_path = get_cached_image_path(prompt, "programmatic")
+    generate_programmatic_visual(prompt, prog_path)
+    return _validate_asset(str(prog_path.resolve()), scene_id), 0.0, "programmatic"
+
+
 class VisualPipeline:
     """Routes visual prompts to appropriate rendering backends based on cost and scene type."""
 
@@ -223,28 +302,50 @@ class VisualPipeline:
             media_type = "image"
             cost = 0.0
 
-        # 2. Stock Footage ($0.00 Pixabay, fallback Imagen 3 $0.03)
+        # 2. Stock Footage ($0.00 Pixabay video, fallback image chain)
         elif v_type == "stock":
-            videos = search_stock_videos(query=prompt[:40])
+            videos = []
+            try:
+                videos = search_stock_videos(query=prompt[:40])
+            except Exception as exc:  # noqa: BLE001 — no videos: fall through to image
+                # A missing PIXABAY_KEY raises in search_stock_videos;
+                # treat it as "no videos" instead of killing finalize.
+                logger.warning(
+                    f"Pixabay video search failed for scene {scene.id} "
+                    f"({exc}); falling back to image."
+                )
             if videos and videos[0].get("url"):
                 asset_path = download_media(videos[0]["url"], extension="mp4")
-                media_type = "video"
-                cost = 0.0
-            else:
-                # Fallback to AI image ONLY if budget allows. Previously this
-                # branch generated an image even when unaffordable, with
-                # cost left at 0.0 — silent overspend. Now it fails loudly.
-                if not self.tracker.can_afford(0.03):
-                    raise RuntimeError(
-                        f"Budget exhausted for scene {scene.id}: cannot afford Imagen 3 "
-                        f"stock fallback ($0.03, spend ${self.tracker.current_spend:.2f}/"
-                        f"${self.tracker.max_budget:.2f})."
+                # download_media touches a 0-byte file when the download
+                # fails — fall through to the image chain instead of
+                # handing assembly a 0-byte clip.
+                if not Path(asset_path).exists() or Path(asset_path).stat().st_size == 0:
+                    logger.warning(
+                        f"Pixabay video download for scene {scene.id} "
+                        "produced an empty file; falling back to image."
                     )
-                asset_path = generate_image(prompt, model="gemini/imagen-3.0-generate-001")
-                cost = 0.03
-                self.tracker.record_spend(cost, f"Imagen 3 stock fallback scene {scene.id}")
+                    asset_path, cost, _src = _image_with_fallback(
+                        prompt, scene.id,
+                        allow_paid=self.tracker.can_afford(0.03),
+                    )
+                    if cost:
+                        self.tracker.record_spend(cost, f"Imagen 3 stock fallback scene {scene.id}")
+                else:
+                    media_type = "video"
+                    cost = 0.0
+            else:
+                # Fallback to the image chain (Imagen 3 when the budget
+                # allows it, else the free Pixabay / programmatic
+                # sources). Previously this raised on budget exhaustion
+                # and on any Imagen failure — run #18 died here.
+                asset_path, cost, _src = _image_with_fallback(
+                    prompt, scene.id,
+                    allow_paid=self.tracker.can_afford(0.03),
+                )
+                if cost:
+                    self.tracker.record_spend(cost, f"Imagen 3 stock fallback scene {scene.id}")
 
-        # 3. AI Generated Video Clip ($0.05 fal.ai if budget >= $0.05, else Imagen 3)
+        # 3. AI Generated Video Clip ($0.05 fal.ai if budget >= $0.05, else image chain)
         elif v_type == "ai_gen":
             if self.tracker.can_afford(0.05):
                 video_res = generate_fal_video(prompt, duration_sec=min(scene.duration_sec, 5))
@@ -254,30 +355,54 @@ class VisualPipeline:
                     cost = 0.05
                     self.tracker.record_spend(cost, f"fal.ai LTX-Video scene {scene.id}")
                 else:
-                    asset_path = generate_image(prompt)
-                    cost = 0.03
-                    self.tracker.record_spend(cost, f"Imagen 3 ai_gen fallback scene {scene.id}")
+                    asset_path, cost, _src = _image_with_fallback(
+                        prompt, scene.id,
+                        allow_paid=self.tracker.can_afford(0.03),
+                    )
+                    if cost:
+                        self.tracker.record_spend(cost, f"Imagen 3 ai_gen fallback scene {scene.id}")
             else:
                 logger.info(f"Budget constraint prevented AI video clip (spend: ${self.tracker.current_spend:.2f}). Using image.")
-                asset_path = generate_image(prompt)
-                cost = 0.03
-                self.tracker.record_spend(cost, f"Imagen 3 ai_gen fallback scene {scene.id}")
+                asset_path, cost, _src = _image_with_fallback(
+                    prompt, scene.id,
+                    allow_paid=self.tracker.can_afford(0.03),
+                )
+                if cost:
+                    self.tracker.record_spend(cost, f"Imagen 3 ai_gen fallback scene {scene.id}")
 
         # 4. AI Image ($0.03 Imagen 3 / $0.01 FLUX)
         elif v_type == "ai_image":
             if self.tracker.can_afford(0.03):
-                asset_path = generate_image(prompt, model="gemini/imagen-3.0-generate-001")
-                cost = 0.03
-                self.tracker.record_spend(cost, f"Imagen 3 scene {scene.id}")
+                asset_path, cost, _src = _image_with_fallback(prompt, scene.id)
+                if cost:
+                    self.tracker.record_spend(cost, f"Imagen 3 scene {scene.id}")
             else:
-                asset_path = generate_image(prompt, model="replicate/flux-schnell")
-                cost = 0.01
-                self.tracker.record_spend(cost, f"FLUX Schnell scene {scene.id}")
+                # FLUX needs REPLICATE_API_TOKEN, which the repo does
+                # not hold — it raises. Fall back to the free image
+                # chain (Pixabay / programmatic) instead of dying.
+                try:
+                    asset_path = generate_image(prompt, model="replicate/flux-schnell")
+                    cost = 0.01
+                    self.tracker.record_spend(cost, f"FLUX Schnell scene {scene.id}")
+                except Exception as exc:  # noqa: BLE001 — free chain instead of dying
+                    logger.warning(
+                        f"FLUX failed for scene {scene.id} ({exc}); "
+                        "falling back to free image chain."
+                    )
+                    asset_path, cost, _src = _image_with_fallback(
+                        prompt, scene.id, allow_paid=False
+                    )
 
         # 5. Diagram or Logo ($0.00 Programmatic or Imagen 3)
         else:
-            asset_path = generate_image(prompt)
-            cost = 0.0
+            asset_path, cost, _src = _image_with_fallback(
+                prompt, scene.id,
+                allow_paid=self.tracker.can_afford(0.03),
+            )
+            if cost:
+                # Previously this branch called Imagen but recorded
+                # cost 0.0 — silent overspend. Record the real spend.
+                self.tracker.record_spend(cost, f"Imagen 3 scene {scene.id}")
 
         asset_path = _validate_asset(asset_path, scene.id)
         return {

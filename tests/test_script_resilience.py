@@ -197,22 +197,48 @@ class TestScriptRepair(unittest.TestCase):
             len(short.seo.description.split()), SEO_DESCRIPTION_TARGET_WORDS
         )
 
-    def test_short_total_below_30s_fails_with_clear_message(self):
+    def test_short_total_below_30s_repairs_from_narration(self):
+        # Run #18: declared durations below the window no longer
+        # fail the Short when the narration itself implies an
+        # in-range length — the repair re-derives durations from
+        # the narration (77 words here, ~31s) instead of trusting
+        # the declared 10+10s.
         data = _malformed_short_dict()
         data["scenes"][0]["duration_sec"] = 10
         data["scenes"][1]["duration_sec"] = 10
-        with self.assertRaises(ValidationError) as ctx:
-            ShortsScript.model_validate(data)
-        self.assertIn("30", str(ctx.exception))
-        self.assertIn("60", str(ctx.exception))
+        short = ShortsScript.model_validate(data)
+        total = sum(s.duration_sec for s in short.scenes)
+        self.assertGreaterEqual(total, 30)
+        self.assertLessEqual(total, 60)
+        self.assertNotEqual(
+            [s.duration_sec for s in short.scenes], [10, 10]
+        )
 
-    def test_short_total_above_60s_fails_with_clear_message(self):
+    def test_short_total_above_60s_repairs_from_narration(self):
+        # Run #18: same the other way — declared 40+40s is repaired
+        # down to the narration-implied ~31s instead of failing.
         data = _malformed_short_dict()
         data["scenes"][0]["duration_sec"] = 40
         data["scenes"][1]["duration_sec"] = 40
+        short = ShortsScript.model_validate(data)
+        total = sum(s.duration_sec for s in short.scenes)
+        self.assertGreaterEqual(total, 30)
+        self.assertLessEqual(total, 60)
+        self.assertNotEqual(
+            [s.duration_sec for s in short.scenes], [40, 40]
+        )
+
+    def test_short_narration_too_short_to_fit_still_fails(self):
+        # Run #18: a narration so short that even CTA extension
+        # cannot reach 30s of speech (~11s implied) must still fail
+        # loudly — the declared durations stay narration-derived
+        # (~14s) instead of being scaled onto the target to mask it.
+        data = _malformed_short_dict()
+        data["scenes"][0]["narration"] = "Robots change everything fast today."
+        data["scenes"][1]["narration"] = "Watch the full breakdown here."
         with self.assertRaises(ValidationError) as ctx:
             ShortsScript.model_validate(data)
-        self.assertIn("60", str(ctx.exception))
+        self.assertIn("total duration must be 30", str(ctx.exception))
 
     def test_long_total_outside_5_15_min_only_warns_never_rejects(self):
         # Length is automatic per topic (user, 26 Nov 2026): a 200s
@@ -250,15 +276,17 @@ class TestScriptRepair(unittest.TestCase):
         self.assertNotIn("Made with AI", script.seo.description)
 
     def test_summarize_validation_error_lists_fields(self):
+        # Run #18: an out-of-range Short is repaired now, so the
+        # summary is exercised on a genuinely unfixable input
+        # (no scenes at all) instead.
         data = _malformed_short_dict()
-        data["scenes"][0]["duration_sec"] = 5
-        data["scenes"][1]["duration_sec"] = 5
+        data["scenes"] = []
         try:
             ShortsScript.model_validate(data)
             self.fail("expected ValidationError")
         except ValidationError as exc:
             summary = _summarize_validation_error(exc)
-            self.assertIn("30", summary)
+            self.assertIn("scenes", summary)
             self.assertLess(len(summary), 1000)
 
 
