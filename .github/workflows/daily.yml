@@ -2,7 +2,6 @@ name: TubePilot AI Daily Automation
 
 on:
   schedule:
-    # Runs at 04:00 UTC every single day (1 longform + 3 shorts)
     - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
@@ -14,11 +13,22 @@ on:
       pillar:
         description: 'Content Pillar'
         required: true
-        default: 'finance_to_technical'
+        default: 'ai_everything'
         type: choice
         options:
+          - 'ai_everything'
           - 'finance_to_technical'
           - 'tech_to_financial'
+      shorts_count:
+        description: 'Shorts to produce from the same topic (0 = long video only)'
+        required: false
+        default: '3'
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '2'
+          - '3'
 
 permissions:
   contents: read
@@ -73,7 +83,7 @@ jobs:
           python -c "from db.setup_sheets import setup_all_sheets; setup_all_sheets()"
           python -c "from storage.ephemeral import startup_orphan_sweep; startup_orphan_sweep()"
 
-      - name: Run Pipeline (With Retry for Network Resilience)
+      - name: Run Daily Output — 1 Long Video + 3 Shorts (With Retry for Network Resilience)
         id: run_pipeline
         uses: nick-fields/retry@v3
         with:
@@ -81,15 +91,17 @@ jobs:
           max_attempts: 2
           retry_on: error
           command: |
-            python -u scripts/dev_run.py \
+            python -u scripts/daily_run.py \
               ${{ inputs.topic && format('--topic "{0}"', inputs.topic) || '' }} \
-              --pillar ${{ inputs.pillar || 'finance_to_technical' }} \
+              --pillar ${{ inputs.pillar || 'ai_everything' }} \
+              --shorts-count ${{ inputs.shorts_count || '3' }} \
+              --scheduled \
               --no-stop
 
       - name: Notify Success on Telegram
         if: success()
         run: |
-          python scripts/notify.py "✅ *TubePilot AI Daily Run Completed Successfully!* Videos uploaded private to YouTube and registered in Google Sheets."
+          python scripts/notify.py "✅ *TubePilot AI Daily Run Completed Successfully!* 1 long video + 3 Shorts uploaded private to YouTube and registered in Google Sheets (long video in yt_videos, Shorts in yt_shorts, trends in yt_trends)."
 
       - name: Notify Failure on Telegram
         if: failure()
