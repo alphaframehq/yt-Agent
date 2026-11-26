@@ -83,6 +83,11 @@ def _is_fabricated_article(article: Dict[str, Any]) -> bool:
 # real titles/URLs. The fallback never fabricates: if RSS also yields
 # nothing, search_fintech_context raises and the run fails loudly —
 # correctly — instead of scripting from invented facts.
+# UPDATE (26 Nov 2026, run #15): a per-domain HTTP error used to abort
+# the news->web loop entirely — TinySearch returned HTTP 400 for
+# domain_type=news on the long Hindi-mixed topic and web was never
+# tried. _tinysearch_query() now catches the error per domain type and
+# falls through to web before giving up and hitting the RSS fallback.
 TINYSEARCH_BASE_URL = "https://api.search.tinyfish.ai"
 
 # RSS source labels for fallback articles (feed ids in tools/trends.py).
@@ -164,20 +169,39 @@ def _tinysearch_get(
 def _tinysearch_query(topic: str, max_results: int) -> List[Dict[str, Any]]:
     """TinySearch primary path: news articles first, then general web.
 
-    Raises ValueError if TINYFISH_API_KEY is missing (not retried) and
-    RuntimeError on transport/HTTP failure or zero articles from both
-    domain types (retried once by tenacity).
+    Each domain type is tried independently: an HTTP error on one
+    (run #15 — TinySearch returned HTTP 400 for domain_type=news on
+    the long Hindi-mixed topic, which used to abort the loop before
+    web was ever tried) falls through to the next domain type
+    instead of failing the whole query. Only when BOTH domain types
+    error or return zero articles does this raise RuntimeError
+    (retried once by tenacity, then the caller falls back to RSS).
+
+    Raises ValueError if TINYFISH_API_KEY is missing (not retried).
     """
     api_key = get_secret("TINYFISH_API_KEY")
     if not api_key:
         raise ValueError("TINYFISH_API_KEY is required for TinySearch")
 
+    last_error: Exception | None = None
     for domain_type in ("news", "web"):
-        articles = _tinysearch_get(api_key, topic, max_results, domain_type)
+        try:
+            articles = _tinysearch_get(api_key, topic, max_results, domain_type)
+        except RuntimeError as exc:
+            # A per-domain failure (e.g. HTTP 400 on news) must not
+            # skip the other domain type — log and keep going.
+            logger.warning(
+                f"TinySearch {domain_type} failed for topic '{topic}' "
+                f"({exc}); trying the next domain type."
+            )
+            last_error = exc
+            continue
         if articles:
             return articles
     raise RuntimeError(
-        f"TinySearch returned zero articles for topic '{topic}' (news + web)"
+        f"TinySearch returned zero articles for topic '{topic}' "
+        f"(news + web)"
+        + (f"; last error: {last_error}" if last_error else "")
     )
 
 

@@ -79,6 +79,7 @@ __all__ = [
     "TrendReport",
     "TrendingTopic",
     "DailyTrendPick",
+    "derive_search_query",
     "fetch_trends",
     "parse_news_rss",
     "parse_trends_rss",
@@ -429,6 +430,53 @@ def _fetch_url(url: str, opener: Any = None) -> bytes:
             pass
 
 
+# Search-query derivation (26 Nov 2026, run #15): a queued topic is a
+# human sentence, often Hindi-mixed ("LLM Training Kaise Hoti Hai?
+# Pretraining Se RLHF Tak — Simple Hindi Me"), and a news feed queried
+# with the raw sentence returns nothing — Google News RSS (en-US) has
+# no match for the Hindi question framing, so the run #15 RSS fallback
+# came back with 0 items. The query feeds only need the content
+# keywords: strip question/framework words (English + Roman Hindi)
+# and single letters, keep up to 6 content tokens in original order
+# and casing. Falls back to the AI-niche query when nothing survives.
+_QUERY_STOPWORDS = frozenset(
+    """
+    how what why when where which who whom whose is are was were be
+    been being do does did can could should would will shall may
+    might the a an in on at to for of and or from with by about as
+    into over under per via vs versus top best new latest simple
+    hindi english explain explained explains guide tutorial basics
+    learn learning understanding introduction intro complete full
+    step steps kaise kya kyon kyun kab kahan kaun kis ka ki ke se
+    tak me mein hai hain ho hoti hota hote raha rahe rahi aur ya par
+    bhi jo ye yeh woh us is in ko ne na nahi ek do teen aaj kal
+    samajh samjho batao janiye dekho
+    """.split()
+)
+_MAX_QUERY_WORDS = 6
+
+
+def derive_search_query(topic: str) -> str:
+    """Short English keyword query from a human topic sentence.
+
+    "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak — Simple
+    Hindi Me" -> "LLM Training Pretraining RLHF". Pure Hindi/empty
+    topics degrade to the AI-niche query, never to "".
+    """
+    tokens: List[str] = []
+    for token in re.split(r"[^A-Za-z0-9]+", topic or ""):
+        if len(token) < 2:
+            continue
+        if token.lower() in _QUERY_STOPWORDS:
+            continue
+        if token in tokens:  # keep first occurrence, preserve order
+            continue
+        tokens.append(token)
+        if len(tokens) >= _MAX_QUERY_WORDS:
+            break
+    return " ".join(tokens) if tokens else _PICKER_QUERY
+
+
 def fetch_trends(
     topic: str,
     pillar: str = "ai_everything",
@@ -437,16 +485,24 @@ def fetch_trends(
     """Fetch current trends/angles for *topic* + niche.
 
     Never raises: each source is attempted independently and any
-    failure is recorded in ``report.errors`` while the other source
-    (and the pipeline) still proceeds.
+    failure is recorded in ``report.errors`` while the other sources
+    still proceed. Run #15 lesson: the fallback used to try only
+    Google News (raw topic as query — 0 items for a Hindi-mixed
+    question) and the known-dead Google Trends RSS, while the
+    working Hacker News / Techmeme / Bing News feeds were only used
+    by the daily picker, never here. All five sources are now
+    attempted, and the query-scoped feeds (Google News, Bing News)
+    use the derived keyword query (see ``derive_search_query``).
     """
     items: List[TrendItem] = []
     sources: List[str] = []
     errors: List[str] = []
 
-    # Source 1: topic-specific recent news.
+    query = urllib.parse.quote_plus(derive_search_query(topic))
+
+    # Source 1: topic-specific recent news (keyword query, not the
+    # raw Hindi-mixed question — run #15 returned 0 items on it).
     try:
-        query = urllib.parse.quote_plus(topic)
         news_xml = _fetch_url(_NEWS_RSS_URL.format(query=query), opener=opener)
         news_items = parse_news_rss(news_xml)
         if news_items:
@@ -458,6 +514,8 @@ def fetch_trends(
         errors.append(f"google_news: {exc}")
 
     # Source 2: US daily trending searches, niche-filtered.
+    # Known 404 since 26 Nov 2026 — still attempted in case it comes
+    # back from the Actions runner; never relied on.
     try:
         trends_xml = _fetch_url(_TRENDS_RSS_URL, opener=opener)
         trend_items = parse_trends_rss(trends_xml, topic)
@@ -469,6 +527,42 @@ def fetch_trends(
     except Exception as exc:  # noqa: BLE001 — fail-soft by design
         errors.append(f"google_trends_daily: {exc}")
 
+    # Source 3: Hacker News front page, AI-niche/topic-filtered.
+    try:
+        hn_xml = _fetch_url(_HN_RSS_URL, opener=opener)
+        hn_items = parse_frontpage_rss(hn_xml, source="hacker_news", topic=topic)
+        if hn_items:
+            items.extend(hn_items)
+            sources.append("hacker_news")
+        else:
+            errors.append("hacker_news: feed returned no AI-relevant items")
+    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+        errors.append(f"hacker_news: {exc}")
+
+    # Source 4: Techmeme, AI-niche/topic-filtered.
+    try:
+        tm_xml = _fetch_url(_TECHMEME_RSS_URL, opener=opener)
+        tm_items = parse_frontpage_rss(tm_xml, source="techmeme", topic=topic)
+        if tm_items:
+            items.extend(tm_items)
+            sources.append("techmeme")
+        else:
+            errors.append("techmeme: feed returned no AI-relevant items")
+    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+        errors.append(f"techmeme: {exc}")
+
+    # Source 5: Bing News, keyword-query-scoped like Google News.
+    try:
+        bing_xml = _fetch_url(_BING_NEWS_RSS_URL.format(query=query), opener=opener)
+        bing_items = parse_news_rss(bing_xml, source="bing_news")
+        if bing_items:
+            items.extend(bing_items)
+            sources.append("bing_news")
+        else:
+            errors.append("bing_news: feed returned no items")
+    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+        errors.append(f"bing_news: {exc}")
+
     report = TrendReport(
         topic=topic,
         pillar=pillar,
@@ -478,7 +572,8 @@ def fetch_trends(
         errors=errors,
     )
     logger.info(
-        f"Trend research for '{topic}': {len(report.angles)} angles from "
+        f"Trend research for '{topic}' (query: '{derive_search_query(topic)}'): "
+        f"{len(report.angles)} angles from "
         f"{len(report.items)} items (sources: {sources or 'none'}; "
         f"errors: {errors or 'none'})"
     )

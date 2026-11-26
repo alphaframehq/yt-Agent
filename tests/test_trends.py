@@ -38,6 +38,7 @@ from orchestration.graph import PipelineState, TubePilotGraph
 from tools.trends import (
     DailyTrendPick,
     TrendingTopic,
+    derive_search_query,
     fetch_trends,
     parse_frontpage_rss,
     parse_news_rss,
@@ -92,6 +93,61 @@ def _opener_for(news: bytes, trends: bytes):
 
 def _failing_opener(req, timeout=None):
     raise RuntimeError("network unreachable (fixture)")
+
+
+def _opener_for_all(news, trends, hn, techmeme, bing, seen=None):
+    """Route each of the five fetch_trends sources to its fixture."""
+    def opener(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if seen is not None:
+            seen.append(url)
+        if "news.ycombinator.com" in url:
+            return _FakeResponse(hn)
+        if "techmeme.com" in url:
+            return _FakeResponse(techmeme)
+        if "bing.com" in url:
+            return _FakeResponse(bing)
+        if "news.google.com" in url:
+            return _FakeResponse(news)
+        return _FakeResponse(trends)
+
+    return opener
+
+
+class TestDeriveSearchQuery(unittest.TestCase):
+    """Run #15: a Hindi-mixed topic sentence must become a short
+    English keyword query that news feeds can actually match."""
+
+    def test_hindi_mixed_topic_becomes_keywords(self):
+        self.assertEqual(
+            derive_search_query(
+                "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak "
+                "— Simple Hindi Me"
+            ),
+            "LLM Training Pretraining RLHF",
+        )
+
+    def test_english_question_keeps_content_words(self):
+        self.assertEqual(
+            derive_search_query("How does GPT-5 training work?"),
+            "GPT training work",
+        )
+
+    def test_pure_hindi_falls_back_to_ai_niche(self):
+        self.assertEqual(
+            derive_search_query("Kaise hoti hai?"), "artificial intelligence"
+        )
+
+    def test_empty_topic_falls_back_to_ai_niche(self):
+        self.assertEqual(derive_search_query(""), "artificial intelligence")
+
+    def test_query_is_capped_at_six_words(self):
+        query = derive_search_query(
+            "OpenAI Anthropic Google DeepMind Mistral Meta NVIDIA "
+            "HuggingFace Cohere new models comparison"
+        )
+        self.assertLessEqual(len(query.split()), 6)
+        self.assertTrue(query.startswith("OpenAI Anthropic Google"))
 
 
 # --- Daily picker fixtures (26 Nov 2026, noon UTC) -------------------------
@@ -198,10 +254,19 @@ class TestTrendParsing(unittest.TestCase):
 
 class TestFetchTrends(unittest.TestCase):
     def test_fetch_trends_angles_come_from_real_items(self):
-        report = fetch_trends("OpenAI GPT models training", opener=_opener_for(NEWS_RSS, TRENDS_RSS))
+        report = fetch_trends(
+            "OpenAI GPT models training",
+            opener=_opener_for_all(
+                NEWS_RSS, TRENDS_RSS, HN_PICK_RSS, TECHMEME_PICK_RSS,
+                BING_PICK_RSS,
+            ),
+        )
         self.assertTrue(report.has_trends)
         self.assertIn("google_news", report.sources)
         self.assertIn("google_trends_daily", report.sources)
+        self.assertIn("hacker_news", report.sources)
+        self.assertIn("techmeme", report.sources)
+        self.assertIn("bing_news", report.sources)
         # Every angle must quote a real feed headline — nothing invented.
         self.assertTrue(any("OpenAI launches new AI agent tool" in a for a in report.angles))
         self.assertEqual(report.errors, [])
@@ -211,13 +276,53 @@ class TestFetchTrends(unittest.TestCase):
         self.assertEqual(report.angles, [])
         self.assertFalse(report.has_trends)
         self.assertEqual(report.sources, [])
-        self.assertEqual(len(report.errors), 2)
+        # All five sources are attempted and each records its failure.
+        self.assertEqual(len(report.errors), 5)
 
     def test_fetch_trends_empty_feeds_yield_no_angles(self):
-        report = fetch_trends("OpenAI GPT models training", opener=_opener_for(EMPTY_RSS, EMPTY_RSS))
+        report = fetch_trends(
+            "OpenAI GPT models training",
+            opener=_opener_for_all(
+                EMPTY_RSS, EMPTY_RSS, EMPTY_RSS, EMPTY_RSS, EMPTY_RSS
+            ),
+        )
         self.assertEqual(report.angles, [])
         self.assertEqual(report.items, [])
-        self.assertTrue(report.errors)  # both sources report "no items"
+        self.assertEqual(report.sources, [])
+        self.assertEqual(len(report.errors), 5)  # all sources report "no items"
+
+    def test_fetch_trends_hindi_topic_survives_dead_google_news(self):
+        """Run #15 regression: Google News returns 0 items for the raw
+        Hindi-mixed question (as on the Actions runner), yet the
+        fallback still yields real articles from the other sources —
+        and the query-scoped feeds are asked with the keyword query,
+        not the raw question."""
+        topic = (
+            "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak "
+            "— Simple Hindi Me"
+        )
+        seen_urls: list = []
+        report = fetch_trends(
+            topic,
+            opener=_opener_for_all(
+                EMPTY_RSS, EMPTY_RSS, HN_PICK_RSS, TECHMEME_PICK_RSS,
+                BING_PICK_RSS, seen=seen_urls,
+            ),
+        )
+        self.assertTrue(report.items)
+        self.assertNotIn("google_news", report.sources)
+        self.assertIn("hacker_news", report.sources)
+        self.assertIn("techmeme", report.sources)
+        self.assertIn("bing_news", report.sources)
+        self.assertTrue(any("google_news" in e for e in report.errors))
+        # The Google News (and Bing) query is the derived keyword
+        # query, not the raw Hindi-mixed question.
+        news_urls = [u for u in seen_urls if "news.google.com" in u]
+        self.assertEqual(len(news_urls), 1)
+        self.assertIn("q=LLM+Training+Pretraining+RLHF", news_urls[0])
+        self.assertNotIn("Kaise", news_urls[0])
+        # The report still keys on the original topic string.
+        self.assertEqual(report.topic, topic)
 
 
 class TestTrendNode(unittest.TestCase):

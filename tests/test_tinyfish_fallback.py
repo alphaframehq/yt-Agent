@@ -178,14 +178,19 @@ class TestTinySearchNewHost(unittest.TestCase):
         self.assertEqual(articles[0]["published_at"], "2026-11-26T10:00:00Z")
         self.assertEqual(articles[0]["url"], "https://example.com/llm-breakthrough")
 
-    def test_news_empty_then_web_is_tried(self):
-        """Zero news results -> the same query is retried as domain_type=web."""
+    def test_news_400_falls_through_to_web(self):
+        """Run #15: TinySearch HTTP 400 on news must NOT skip web.
+
+        The run #15 topic (long Hindi-mixed question) got HTTP 400
+        for domain_type=news and the old code raised out of the loop
+        before web was ever tried. Now news errors fall through.
+        """
         calls = []
 
         def behavior(url, headers, params):
             calls.append(params["domain_type"])
             if params["domain_type"] == "news":
-                return _FakeResponse(200, _tinysearch_payload([]))
+                return _FakeResponse(400, {"error": "bad request"})
             return _FakeResponse(200, _tinysearch_payload([
                 {
                     "position": 1,
@@ -197,10 +202,50 @@ class TestTinySearchNewHost(unittest.TestCase):
             ]))
 
         _FakeClient.behavior = behavior
-        articles = tinyfish.search_fintech_context("LLM Training Guide Topic")
+        articles = tinyfish.search_fintech_context("LLM Training 400 Topic")
         self.assertEqual(calls, ["news", "web"])
         self.assertEqual(len(articles), 1)
-        self.assertEqual(articles[0]["source"], "example.org")
+        self.assertEqual(articles[0]["title"], "LLM Training Guide")
+
+    def test_news_error_then_web_empty_falls_back_to_rss(self):
+        """News 400 + web zero results -> RSS bundle, not a dead run."""
+        calls = []
+
+        def behavior(url, headers, params):
+            calls.append(params["domain_type"])
+            if params["domain_type"] == "news":
+                return _FakeResponse(400, {"error": "bad request"})
+            return _FakeResponse(200, _tinysearch_payload([]))
+
+        _FakeClient.behavior = behavior
+        with patch(
+            "tools.trends.fetch_trends", return_value=_rss_report()
+        ):
+            articles = tinyfish.search_fintech_context("LLM Training 400 Zero")
+        # One retry of the whole query (tenacity, 2 attempts): the
+        # run is saved by RSS, not by the retry.
+        self.assertEqual(calls, ["news", "web", "news", "web"])
+        self.assertEqual(len(articles), 2)
+        self.assertEqual(articles[0]["source"], "Google News")
+
+    def test_both_domain_types_error_and_rss_empty_raises(self):
+        """News 400 + web 400 + empty RSS -> loud failure, never invented."""
+        _FakeClient.behavior = lambda u, h, p: _FakeResponse(
+            400, {"error": "bad request"}
+        )
+        with patch(
+            "tools.trends.fetch_trends",
+            return_value=TrendReport(
+                topic="LLM Training Dead 400",
+                pillar="ai_everything",
+                angles=[],
+                items=[],
+                sources=[],
+                errors=["google_news: feed returned no items"],
+            ),
+        ):
+            with self.assertRaises(RuntimeError):
+                tinyfish.search_fintech_context("LLM Training Dead 400")
 
 
 # ---------------------------------------------------------------------------
