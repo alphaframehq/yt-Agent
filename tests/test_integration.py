@@ -105,7 +105,7 @@ class TestSystemIntegration(unittest.TestCase):
         button_callbacks = [b.get("callback_data") for b in buttons]
         self.assertIn("pub_yt_test_abc123", button_callbacks)
         self.assertIn("rej_yt_test_abc123", button_callbacks)
-        self.assertIn("edit_yt_test_abc123", button_callbacks)
+        self.assertIn("edt_yt_test_abc123", button_callbacks)
         self.assertIn("render_yt_test_abc123", button_callbacks)
         self.assertIn("shorts_yt_test_abc123", button_callbacks)
 
