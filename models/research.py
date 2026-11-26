@@ -119,7 +119,7 @@ class ResearchBundle(BaseModel):
     """
 
     topic: str = Field(..., description="Research topic / video subject.")
-    pillar: Literal["finance_to_technical", "tech_to_financial"] = Field(
+    pillar: Literal["ai_everything", "finance_to_technical", "tech_to_financial"] = Field(
         ...,
         description="Content pillar direction.",
     )
@@ -145,6 +145,18 @@ class ResearchBundle(BaseModel):
         default_factory=YTInsights,
         description="YouTube content-gap insights.",
     )
+    # Current-trend angles for the topic (tools/trends.py, fetched
+    # before script generation). Editorial hooks only — never numeric
+    # facts. Empty when trend research returned nothing / failed;
+    # downstream must treat empty as "no trend input", never invent one.
+    trend_angles: list[str] = Field(
+        default_factory=list,
+        description="Trend angles from the pre-script trend-research step.",
+    )
+    trend_sources: list[str] = Field(
+        default_factory=list,
+        description="Feed names the trend angles came from (google_news, google_trends_daily).",
+    )
     research_confidence: float = Field(
         ...,
         ge=0,
@@ -160,6 +172,12 @@ class ResearchBundle(BaseModel):
         backed by a ``SourceInfo`` whose ``claim_id`` matches a deterministic
         key derived from the financial field.
 
+        A 0.0 value is the codebase's "not retrieved / not applicable"
+        sentinel (see ``ResearchAgent``: AI-niche topics have no
+        financials, market_data is 0.0), NOT a factual claim — so
+        zero-valued facts do not require a citation. Any non-zero
+        number still requires one.
+
         Expected claim_id patterns:
         - ``revenue_<year>``        for each key in ``revenue_by_year``
         - ``segment_<segment>``     for each key in ``segments``
@@ -172,31 +190,31 @@ class ResearchBundle(BaseModel):
         source_ids: set[str] = {s.claim_id for s in self.sources}
         missing: list[str] = []
 
-        # Revenue entries
-        for year in self.financials.revenue_by_year:
+        # Revenue entries (non-zero only — 0.0 is the not-retrieved sentinel)
+        for year, val in self.financials.revenue_by_year.items():
             cid = f"revenue_{year}"
-            if cid not in source_ids:
+            if val and cid not in source_ids:
                 missing.append(cid)
 
-        # Segment entries
-        for seg in self.financials.segments:
+        # Segment entries (non-zero only)
+        for seg, val in self.financials.segments.items():
             cid = f"segment_{seg}"
-            if cid not in source_ids:
+            if val and cid not in source_ids:
                 missing.append(cid)
 
-        # Margins
+        # Margins (non-zero only)
         for margin_name in ("gross", "operating", "net"):
             cid = f"margin_{margin_name}"
-            if cid not in source_ids:
+            if getattr(self.financials.margins, margin_name) and cid not in source_ids:
                 missing.append(cid)
 
-        # Growth rate
-        if "growth_rate" not in source_ids:
+        # Growth rate (non-zero only)
+        if self.financials.growth_rate and "growth_rate" not in source_ids:
             missing.append("growth_rate")
 
-        # Numeric unit economics
+        # Numeric unit economics (non-zero only)
         for key, val in self.financials.unit_economics.items():
-            if isinstance(val, (int, float)):
+            if isinstance(val, (int, float)) and val:
                 cid = f"ue_{key}"
                 if cid not in source_ids:
                     missing.append(cid)

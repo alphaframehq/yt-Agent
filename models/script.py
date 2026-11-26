@@ -44,6 +44,13 @@ _FORBIDDEN_PATTERN: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+# Chart types that render from real retrieved-article data — the only
+# chart types that exist for ai_everything topics. Kept as a literal
+# here (not imported from agents/charts.py) to avoid a models ->
+# agents import cycle; keep in sync with agents/charts.py
+# AI_CHART_TYPES.
+_AI_CHART_TYPES: tuple[str, ...] = ("ai_source_coverage", "ai_source_share")
+
 
 class SceneInfo(BaseModel):
     """A single scene within a video script."""
@@ -130,11 +137,12 @@ class VideoScript(BaseModel):
     """Full-length YouTube video script.
 
     Contains an ordered list of scenes, SEO metadata, and aggregate stats.
-    Validates that the script meets minimum chart-scene requirements and
-    that narration is free of forbidden investment-advice language.
+    Validates pillar-dependent chart-scene rules (see
+    :meth:`_chart_scenes_for_pillar`) and that narration is free of
+    forbidden investment-advice language.
     """
 
-    pillar: Literal["finance_to_technical", "tech_to_financial"] = Field(
+    pillar: Literal["ai_everything", "finance_to_technical", "tech_to_financial"] = Field(
         ...,
         description="Content pillar direction.",
     )
@@ -146,13 +154,53 @@ class VideoScript(BaseModel):
     meta: ScriptMeta = Field(..., description="Aggregate script metadata.")
 
     @model_validator(mode="after")
-    def _min_chart_scenes(self) -> "VideoScript":
-        """Ensure at least 8 scenes have visual_type == 'chart'."""
-        chart_count = sum(1 for s in self.scenes if s.visual_type == "chart")
-        if chart_count < 8:
-            raise ValueError(
-                f"VideoScript requires at least 8 chart scenes, found {chart_count}."
-            )
+    def _chart_scenes_for_pillar(self) -> "VideoScript":
+        """Enforce the chart-scene rule for this script's pillar.
+
+        Finance pillars keep the >= 8 chart-scene mandate: 8 finance
+        chart types exist and render from real bundle financials.
+
+        ai_everything (26 Nov 2026, P0 chart-mandate fix): AI bundles
+        carry 0.0 "not applicable" financial sentinels, so the 8
+        finance chart types cannot render for an AI topic — the
+        prompt's old ">= 8 chart scenes" rule made every AI script
+        unbuildable (either a finance chart type that raises at
+        assembly, or the same source-count chart plotted 8 times).
+        Chart scenes are therefore OPTIONAL for ai_everything (0
+        allowed) and, when present, must use one of the two AI chart
+        types that plot real retrieved-article counts per publisher,
+        each at most once. All other AI visuals use diagram / ai_image
+        / stock (timelines, architecture diagrams, comparison tables
+        as diagrams) — never a fabricated chart.
+        """
+        chart_scenes = [s for s in self.scenes if s.visual_type == "chart"]
+        if self.pillar in ("finance_to_technical", "tech_to_financial"):
+            if len(chart_scenes) < 8:
+                raise ValueError(
+                    f"VideoScript requires at least 8 chart scenes, found {len(chart_scenes)}."
+                )
+            return self
+        # ai_everything: charts optional, AI types only, each at most once.
+        seen: set[str] = set()
+        for scene in chart_scenes:
+            # None defaults to ai_source_coverage at assembly
+            # (agents/visuals.py resolve_scene); count it as that type.
+            resolved = scene.chart_type or "ai_source_coverage"
+            if resolved not in _AI_CHART_TYPES:
+                raise ValueError(
+                    f"ai_everything scene {scene.id}: chart_type "
+                    f"'{scene.chart_type}' cannot render for AI topics "
+                    "(the bundle has no financials); use one of "
+                    f"{list(_AI_CHART_TYPES)}."
+                )
+            if resolved in seen:
+                raise ValueError(
+                    f"ai_everything scene {scene.id}: chart_type "
+                    f"'{resolved}' is already used in this script — each "
+                    "AI chart type plots the same retrieved-article "
+                    "counts, so repeating it only duplicates the chart."
+                )
+            seen.add(resolved)
         return self
 
     @model_validator(mode="after")
@@ -180,7 +228,7 @@ class ShortsScript(BaseModel):
     maximum 3 scenes, total duration ≤ 60 seconds, and a 9:16 aspect ratio.
     """
 
-    pillar: Literal["finance_to_technical", "tech_to_financial"] = Field(
+    pillar: Literal["ai_everything", "finance_to_technical", "tech_to_financial"] = Field(
         ...,
         description="Content pillar direction.",
     )

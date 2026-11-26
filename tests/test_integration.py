@@ -124,7 +124,7 @@ class TestSystemIntegration(unittest.TestCase):
         }
         mock_notify.return_value = True
 
-        test_args = ["dev_run.py", "--topic", "Stripe Architecture", "--no-stop"]
+        test_args = ["dev_run.py", "--topic", "ChatGPT Architecture", "--no-stop"]
         with patch.object(sys, "argv", test_args):
             exit_code = dev_run_main()
             self.assertEqual(exit_code, 0)

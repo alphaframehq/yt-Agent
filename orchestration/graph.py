@@ -30,9 +30,11 @@ from agents.research import ResearchAgent, ResearchInput
 from agents.script import ScriptAgent
 from agents.verify import VerificationAgent
 from config_manager import snapshot_config
+from db.sheets import save_trend_report
 from models.research import ResearchBundle
-from models.script import VideoScript
+from models.script import ShortsScript, VideoScript
 from models.verification import VerificationReport
+from tools.trends import TrendReport, fetch_trends
 
 __all__ = [
     "PipelineState",
@@ -44,7 +46,7 @@ __all__ = [
 class PipelineState(BaseModel):
     """Execution state passed through graph nodes."""
     topic: str
-    pillar: str = "finance_to_technical"
+    pillar: str = "ai_everything"
     research: Optional[ResearchBundle] = None
     script: Optional[VideoScript] = None
     verification: Optional[VerificationReport] = None
@@ -60,6 +62,20 @@ class PipelineState(BaseModel):
     # All rendered Shorts paths (rendered_shorts_path keeps the first one
     # for backwards compatibility).
     rendered_shorts_paths: List[str] = Field(default_factory=list)
+    # ShortsScripts matching rendered_shorts_paths, in the same order —
+    # the daily runner needs them for the Shorts' SEO at upload time.
+    shorts_scripts: List[ShortsScript] = Field(default_factory=list)
+    # Trend research for the day's topic (tools/trends.py). None until
+    # node_trends runs; an empty-angles report (not None) means the
+    # step ran but no trends were found / feeds failed.
+    trend_report: Optional[TrendReport] = None
+    # Per-Short upload outcomes, filled by the daily runner
+    # (agents/shorts.py): [{index, title, status, yt_video_id, error}].
+    # A Short's failure is recorded here and never flips the long
+    # video's status.
+    short_uploads: List[Dict[str, Any]] = Field(default_factory=list)
+    # not_run | partial | complete | failed | skipped
+    shorts_status: str = "not_run"
     cost_usd: float = 0.0
 
 
@@ -71,8 +87,27 @@ class TubePilotGraph:
         self.script_agent = ScriptAgent()
         self.verify_agent = VerificationAgent()
 
-    def run(self, topic: str, pillar: str = "finance_to_technical") -> PipelineState:
+    def run(self, topic: str, pillar: str = "ai_everything") -> PipelineState:
         """Run full state machine from initialization to finalization or human review."""
+        # 0. Topic safety / niche gate (26 Nov 2026). A blocked or
+        # off-niche topic must never reach research, an LLM call, or
+        # the YouTube API — return a failed state immediately, with a
+        # clear error, so the runner can mark the topic failed in the
+        # Sheet and move on to the next queued topic. Checked before
+        # snapshot_config() so a bad topic costs no Sheets/LLM work.
+        from tools.topic_filter import check_topic
+
+        allowed, filter_reason = check_topic(topic, pillar)
+        if not allowed:
+            logger.error(f"Topic rejected by topic filter: '{topic}' ({filter_reason})")
+            return PipelineState(
+                topic=topic,
+                pillar=pillar,
+                stage="filter",
+                status="failed",
+                error=f"Topic rejected by topic filter: {filter_reason}",
+            )
+
         # 1. Snapshot config at pipeline start to prevent mid-run race conditions
         frozen_config = snapshot_config()
         state = PipelineState(
@@ -89,6 +124,12 @@ class TubePilotGraph:
         state = self.node_research(state)
         if state.status == "failed":
             return state
+
+        # Step 1b: Trend research (daily-output design, 26 Nov 2026).
+        # Runs BEFORE script generation so the long video and the 3
+        # Shorts can lead with today's angles. Non-fatal by design:
+        # node_trends never fails the run (see its docstring).
+        state = self.node_trends(state)
 
         # Step 2: Script
         state = self.node_script(state)
@@ -139,6 +180,39 @@ class TubePilotGraph:
             state.error = str(e)
             return state
 
+    def node_trends(self, state: PipelineState) -> PipelineState:
+        """Node 1b: Fetch current trends/angles for the topic + niche.
+
+        Runs after research, before script generation. NON-FATAL by
+        design: ``fetch_trends()`` never raises, and even a total
+        failure here (no feeds, no Sheet) only leaves an empty-angles
+        report on the state — the run continues with the research
+        bundle alone. Trend angles are editorial hooks, never numeric
+        facts, so an empty report can never fabricate a claim.
+
+        The report is logged (sources + angles), attached to the
+        research bundle (``bundle.trend_angles`` /
+        ``bundle.trend_sources``) so the script agent can use it, and
+        recorded in the ``yt_trends`` Sheet tab when the Sheet is
+        reachable — a Sheets failure is logged and ignored.
+        """
+        state.stage = "trends"
+        try:
+            logger.info("Executing node: trends")
+            report = fetch_trends(topic=state.topic, pillar=state.pillar)
+        except Exception as e:  # noqa: BLE001 — belt & braces; fetch_trends never raises
+            logger.warning(f"Trend research failed unexpectedly ({e}); continuing without trends.")
+            report = TrendReport(topic=state.topic, pillar=state.pillar, errors=[str(e)])
+        state.trend_report = report
+        if state.research is not None:
+            state.research.trend_angles = list(report.angles)
+            state.research.trend_sources = list(report.sources)
+        try:
+            save_trend_report(state.topic, report, pillar=state.pillar)
+        except Exception as e:  # noqa: BLE001 — Sheet unavailable: log, continue
+            logger.warning(f"Could not save trend report to Google Sheets (continuing): {e}")
+        return state
+
     def node_script(self, state: PipelineState) -> PipelineState:
         """Node 2: Generate VideoScript from ResearchBundle."""
         state.stage = "script"
@@ -146,7 +220,7 @@ class TubePilotGraph:
             logger.info("Executing node: script")
             if not state.research:
                 raise ValueError("ResearchBundle missing before script generation.")
-            script = self.script_agent.run(state.research)
+            script = self.script_agent.run(state.research, trend_report=state.trend_report)
             state.script = script
             return state
         except Exception as e:
@@ -201,6 +275,17 @@ class TubePilotGraph:
         after that private upload is confirmed. Any assembly or upload
         failure sets status ``failed`` with the error and no video ID.
         No fake ``yt_priv_<md5>`` ID is ever minted.
+
+        P0 fix (26 Nov 2026, Phase 2 review): the long video is
+        assembled AND uploaded FIRST, and the 3 Shorts are rendered
+        only afterwards inside their own try/except. Previously the
+        Shorts were rendered before the upload, so one Short assemble
+        failure raised out of finalize and the already-rendered long
+        video was never uploaded — contradicting the daily runner's
+        Shorts-isolation claim. A Shorts failure now only logs a
+        warning (the daily runner re-renders Shorts from the research
+        bundle when no rendered pairs exist) and can never lose the
+        long video.
         """
         state.stage = "finalize"
         logger.info("Executing node: finalize (Media assembly & private upload)")
@@ -227,23 +312,14 @@ class TubePilotGraph:
             logger.info(f"Longform video assembled at: {video_path}")
             state.rendered_video_path = video_path
 
-            # Render ALL Shorts, not only the first one.
-            shorts_paths: List[str] = []
-            if state.research:
-                shorts_list = self.script_agent.generate_shorts(state.research, count=3)
-                for short_script in shorts_list:
-                    shorts_path = assemble_shorts(short_script, bundle_data=state.research)
-                    logger.info(f"Shorts video assembled at: {shorts_path}")
-                    shorts_paths.append(shorts_path)
-            state.rendered_shorts_paths = shorts_paths
-            state.rendered_shorts_path = shorts_paths[0] if shorts_paths else None
-
-            # Real private upload. Only a confirmed upload may complete
-            # the run. The real VerificationReport from node_verify is
-            # passed through — upload is refused unless it is a pass.
-            # Fixed 25 Nov 2026: this was the uploader/graph integration
-            # gap in the first patch set (graph called run_upload()
-            # without a report, uploader required one).
+            # Real private upload of the LONG video FIRST (P0 fix, 26 Nov
+            # 2026 — see docstring). Only a confirmed upload may
+            # complete the run. The real VerificationReport from
+            # node_verify is passed through — upload is refused unless
+            # it is a pass. Fixed 25 Nov 2026: this was the
+            # uploader/graph integration gap in the first patch set
+            # (graph called run_upload() without a report, uploader
+            # required one).
             if state.verification is None:
                 raise RuntimeError(
                     "Refusing upload: no VerificationReport exists for this run."
@@ -259,6 +335,13 @@ class TubePilotGraph:
                 script=state.script,
                 verification_report=state.verification,
                 cost_usd=state.cost_usd,
+                # Internal linking (26 Nov 2026): the uploaded
+                # description gets the "Watch next" (related videos)
+                # + "Sources / References" blocks from the real
+                # research bundle. The day's Shorts links are added
+                # later by cross_link_daily_uploads (daily runner),
+                # once the Shorts exist.
+                bundle=state.research,
             )
             yt_video_id = result.yt_video_id
             if not yt_video_id or yt_video_id.startswith(("yt_sim_", "yt_priv_")):
@@ -268,6 +351,32 @@ class TubePilotGraph:
             state.output_video_id = yt_video_id
             state.status = "completed"
             logger.info(f"Private upload confirmed, YouTube video ID: {yt_video_id}")
+
+            # Render ALL Shorts AFTER the long upload, isolated: any
+            # Shorts failure is logged and leaves the completed long
+            # video untouched. If rendering fails part-way, no partial
+            # paths are recorded on the state (paths/scripts would be
+            # unpaired), so the daily runner re-renders all Shorts
+            # from the research bundle.
+            try:
+                shorts_paths: List[str] = []
+                if state.research:
+                    shorts_list = self.script_agent.generate_shorts(
+                        state.research, count=3, trend_report=state.trend_report
+                    )
+                    state.shorts_scripts = list(shorts_list)
+                    for short_script in shorts_list:
+                        shorts_path = assemble_shorts(short_script, bundle_data=state.research)
+                        logger.info(f"Shorts video assembled at: {shorts_path}")
+                        shorts_paths.append(shorts_path)
+                state.rendered_shorts_paths = shorts_paths
+                state.rendered_shorts_path = shorts_paths[0] if shorts_paths else None
+            except Exception as exc:  # noqa: BLE001 — Shorts must not kill the long video
+                logger.warning(
+                    f"Shorts rendering failed after long upload ({exc}); "
+                    "long video stays completed, Shorts will be re-rendered "
+                    "from the research bundle by the daily runner."
+                )
             return state
         except Exception as e:
             logger.error(f"Finalize failed: {e}")
@@ -289,7 +398,7 @@ def create_pipeline_graph() -> TubePilotGraph:
     return TubePilotGraph()
 
 
-def run_pipeline(topic: str, pillar: str = "finance_to_technical", config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def run_pipeline(topic: str, pillar: str = "ai_everything", config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Top-level pipeline execution function.
 
     Executes TubePilotGraph and returns standardized result dictionary.
@@ -303,6 +412,15 @@ def run_pipeline(topic: str, pillar: str = "finance_to_technical", config: Optio
         "script": state.script,
         "research": state.research,
         "verification": state.verification,
+        # The failure reason, when status is not "complete" (used by
+        # scripts/dev_run.py to decide whether a failure is
+        # topic-attributable — and the topic should be marked failed
+        # and skipped — or a real run failure to alert on).
+        "error": state.error,
+        "trend_report": state.trend_report,
+        "shorts_scripts": getattr(state, "shorts_scripts", []),
+        "short_uploads": getattr(state, "short_uploads", []),
+        "shorts_status": getattr(state, "shorts_status", "not_run"),
         # P0/P1: no real visual-cost source is tracked in this graph, so
         # report the tracked cost (0.0 = untracked/unknown), never the
         # fabricated 0.09 fallback.

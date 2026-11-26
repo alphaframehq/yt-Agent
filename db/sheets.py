@@ -16,6 +16,10 @@ for YouTube insights (``YTInsights`` in ``models/research.py``):
 6. yt_bot_requests (7-day TTL bot-to-runner message bus, key: request_id)
 7. yt_topics_queue (editorial queue, key: topic_id)
 8. yt_insights (YouTube landscape insights per topic, key: topic_hash)
+9. yt_trends (daily trend-research reports per topic, key: topic_hash)
+10. yt_shorts (Shorts upload/status tracking, separate from the
+   long-form yt_videos tab so a Short's failure never touches the
+   long video's record and vice versa, key: short_id)
 
 Storage layout: the first row of every tab is the header (see
 ``TAB_HEADERS``). Values are stored as plain Sheets values, except the
@@ -63,8 +67,17 @@ __all__ = [
     "get_latest_verification_log",
     "save_yt_insights",
     "get_yt_insights",
+    "save_trend_report",
+    "get_trend_report",
+    "save_short_record",
+    "get_short_record",
+    "update_short_status",
+    "list_recent_shorts",
+    "get_related_videos",
     "dequeue_next_topic",
     "get_topic_queue",
+    "update_topic_status",
+    "mark_topic_failed",
     "TAB_HEADERS",
     "JSON_COLUMNS",
 ]
@@ -97,6 +110,15 @@ TAB_HEADERS: Dict[str, List[str]] = {
         "topic_hash", "topic", "top_titles_json", "common_tags_json",
         "gaps_json", "created_at",
     ],
+    "yt_trends": [
+        "topic_hash", "topic", "pillar", "angles_json", "sources_json",
+        "fetched_at",
+    ],
+    "yt_shorts": [
+        "short_id", "parent_topic", "topic", "yt_video_id", "yt_url",
+        "title", "status", "created_at", "published_at", "cost_usd",
+        "extra_json",
+    ],
 }
 
 # Columns whose cells hold a JSON-encoded string (dicts / lists).
@@ -105,6 +127,8 @@ JSON_COLUMNS: Dict[str, set] = {
     "yt_bot_requests": {"inputs_json"},
     "yt_config": {"value_json"},
     "yt_insights": {"top_titles_json", "common_tags_json", "gaps_json"},
+    "yt_trends": {"angles_json", "sources_json"},
+    "yt_shorts": {"extra_json"},
 }
 
 # Tabs whose rows carry a `ttl` (epoch seconds) — expired rows are
@@ -479,7 +503,7 @@ def get_bot_requests(status: str = "pending") -> List[Dict[str, Any]]:
 # -----------------------------------------------------------------------------
 # 7. yt_topics_queue
 # -----------------------------------------------------------------------------
-def enqueue_topic(topic: str, pillar: str = "finance_to_technical", priority: int = 1) -> str:
+def enqueue_topic(topic: str, pillar: str = "ai_everything", priority: int = 1) -> str:
     """Add new topic to the processing queue."""
     topic_id = f"top_{hashlib.md5(topic.encode()).hexdigest()[:8]}"
     item = {
@@ -494,14 +518,43 @@ def enqueue_topic(topic: str, pillar: str = "finance_to_technical", priority: in
     return topic_id
 
 
+def _as_number(value: Any, default: float) -> float:
+    """Coerce a Sheets cell value to a number for sorting.
+
+    Sheets cells read back as whatever the API returns — usually a
+    number for numeric cells, but a hand-edited or bot-written cell
+    can come back as a string ("10"). Sorting on a mix of str/int
+    raises ``TypeError: '<' not supported between 'str' and 'int'``
+    (and ``-value`` on a str raises ``TypeError``), which used to
+    crash ``get_next_topic()`` — i.e. crash the dequeue step of the
+    daily run before any pipeline code ran.
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def get_next_topic() -> Optional[Dict[str, Any]]:
     """Retrieve highest-priority pending topic and mark running."""
     topics = list_topics_queue(status="pending")
     if not topics:
         return None
 
-    # Sort by priority descending, then added_at ascending
-    sorted_topics = sorted(topics, key=lambda t: (-t.get("priority", 1), t.get("added_at", 0)))
+    # Sort by priority descending, then added_at ascending.
+    # Priorities/timestamps are coerced to numbers first (see
+    # _as_number): a string cell must never crash the sort.
+    sorted_topics = sorted(
+        topics,
+        key=lambda t: (
+            -_as_number(t.get("priority", 1), 1),
+            _as_number(t.get("added_at", 0), 0),
+        ),
+    )
     selected = sorted_topics[0]
     selected_id = selected["topic_id"]
 
@@ -512,6 +565,28 @@ def get_next_topic() -> Optional[Dict[str, Any]]:
             break
     selected["status"] = "running"
     return selected
+
+
+def update_topic_status(topic_id: str, status: str) -> bool:
+    """Set the ``status`` of one queue row (e.g. ``failed``).
+
+    26 Nov 2026: used by the runner to park a topic that can never
+    be produced (safety-blocked, off-niche, or unresearchable) so it
+    is never dequeued again. Returns False when no row matches.
+    """
+    for row_number, row in _read_rows_indexed("yt_topics_queue"):
+        if row.get("topic_id") == topic_id:
+            row["status"] = status
+            _update_row("yt_topics_queue", row_number, row)
+            logger.info("Topic {} marked '{}' in queue", topic_id, status)
+            return True
+    logger.warning("update_topic_status: no queue row for {}", topic_id)
+    return False
+
+
+def mark_topic_failed(topic_id: str) -> bool:
+    """Mark one queued topic ``failed`` (never dequeued again)."""
+    return update_topic_status(topic_id, "failed")
 
 
 def list_topics_queue(status: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -536,6 +611,91 @@ def list_recent_videos(limit: int = 5) -> List[Dict[str, Any]]:
         items.append(rec)
     items.sort(key=lambda x: x.get("created_at", 0), reverse=True)
     return items[:limit]
+
+
+# Words too generic to count as a "topic match" for related videos.
+_RELATED_STOPWORDS = {
+    "about", "after", "before", "being", "between", "during", "every",
+    "first", "india", "money", "never", "other", "their", "there",
+    "these", "thing", "think", "those", "under", "using", "video",
+    "videos", "watch", "what", "when", "where", "which", "while",
+    "world", "years", "your", "with", "from", "that", "this",
+}
+
+
+def _related_words(text: str) -> set:
+    """Significant lowercase words (>= 4 chars, no stopwords) in *text*."""
+    words = set()
+    for raw in str(text or "").lower().replace("-", " ").split():
+        word = "".join(c for c in raw if c.isalnum())
+        if len(word) >= 4 and word not in _RELATED_STOPWORDS:
+            words.add(word)
+    return words
+
+
+def get_related_videos(
+    topic: str = "",
+    pillar: Optional[str] = None,
+    limit: int = 5,
+    exclude_yt_video_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Previously uploaded channel videos related to *topic* / *pillar*.
+
+    Internal-linking read helper (26 Nov 2026): the uploader builds a
+    "Watch next" block from these rows — the channel's own videos,
+    never invented links. Matching is deliberately simple and honest:
+
+    - Only rows with a real ``yt_video_id`` and a status of
+      ``public`` or ``pending_approval`` (rejected/failed rows are
+      never linked).
+    - Score: +2 for the same pillar, +1 per significant word shared
+      between *topic* and the row's title/topic. Ties break by newest
+      ``created_at`` first. With no topic/pillar match at all, the
+      most recent videos are returned (score 0) rather than nothing —
+      a recent channel video is still a real, clickable next watch.
+    - ``exclude_yt_video_ids`` keeps the video being described out of
+      its own "Watch next" list.
+
+    Returns at most *limit* dicts with ``title``, ``yt_video_id``,
+    ``yt_url``, ``topic``, ``pillar``, ``created_at``. Raises
+    RuntimeError when Sheets cannot be read (callers treat that as
+    "no related videos" and upload without the block — a Sheets
+    outage must never block an upload).
+    """
+    excluded = set(exclude_yt_video_ids or [])
+    query_words = _related_words(topic)
+    scored = []
+    for row in _read_rows("yt_videos"):
+        rec = {k: v for k, v in row.items() if k != "extra_json"}
+        rec.update(row.get("extra_json") or {})
+        yt_video_id = str(rec.get("yt_video_id") or "").strip()
+        if not yt_video_id or yt_video_id in excluded:
+            continue
+        if str(rec.get("status") or "") not in ("public", "pending_approval"):
+            continue
+        score = 0
+        if pillar and rec.get("pillar") and str(rec["pillar"]) == str(pillar):
+            score += 2
+        row_words = _related_words(
+            f"{rec.get('title', '')} {rec.get('topic', '')}"
+        )
+        score += len(query_words & row_words)
+        scored.append((score, rec.get("created_at", 0), rec))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    out = []
+    for _score, _created, rec in scored[: max(limit, 0)]:
+        out.append(
+            {
+                "title": rec.get("title") or rec.get("topic") or "Untitled video",
+                "yt_video_id": rec.get("yt_video_id"),
+                "yt_url": rec.get("yt_url")
+                or f"https://youtu.be/{rec.get('yt_video_id')}",
+                "topic": rec.get("topic", ""),
+                "pillar": rec.get("pillar", ""),
+                "created_at": rec.get("created_at", 0),
+            }
+        )
+    return out
 
 
 def clear_topic_queue() -> int:
@@ -603,3 +763,111 @@ def get_yt_insights(topic: str) -> Optional[Dict[str, Any]]:
                 "created_at": row.get("created_at"),
             }
     return None
+
+
+# -----------------------------------------------------------------------------
+# 9. yt_trends (daily trend-research reports, key: topic_hash)
+# -----------------------------------------------------------------------------
+def save_trend_report(topic: str, report: Any, pillar: str = "finance_to_technical") -> str:
+    """Store a TrendReport (tools/trends.py) in the yt_trends tab.
+
+    *report* may be a TrendReport instance or a plain dict with
+    ``angles`` / ``sources`` / ``fetched_at``. Keyed by the same
+    topic hash as the research cache, so one row per topic per day's
+    run (upsert). Raises RuntimeError on Sheets failure — callers
+    that must degrade gracefully (the pipeline trend node) catch it.
+    """
+    topic_hash = hashlib.md5(topic.lower().strip().encode("utf-8")).hexdigest()
+    if hasattr(report, "model_dump"):
+        data = report.model_dump()
+    elif isinstance(report, dict):
+        data = report
+    else:
+        raise ValueError("report must be a TrendReport model or a dict")
+    item = {
+        "topic_hash": topic_hash,
+        "topic": topic,
+        "pillar": data.get("pillar", pillar),
+        "angles_json": data.get("angles", []),
+        "sources_json": data.get("sources", []),
+        "fetched_at": data.get("fetched_at") or int(time.time()),
+    }
+    _upsert_row("yt_trends", "topic_hash", item)
+    logger.info("Trend report saved to Google Sheets yt_trends: {}", topic)
+    return topic_hash
+
+
+def get_trend_report(topic: str) -> Optional[Dict[str, Any]]:
+    """Retrieve the stored trend report for a topic, if any."""
+    topic_hash = hashlib.md5(topic.lower().strip().encode("utf-8")).hexdigest()
+    for row in _read_rows("yt_trends"):
+        if row.get("topic_hash") == topic_hash:
+            return {
+                "topic_hash": row.get("topic_hash"),
+                "topic": row.get("topic"),
+                "pillar": row.get("pillar"),
+                "angles": row.get("angles_json") or [],
+                "sources": row.get("sources_json") or [],
+                "fetched_at": row.get("fetched_at"),
+            }
+    return None
+
+
+# -----------------------------------------------------------------------------
+# 10. yt_shorts (Shorts tracking, separate from yt_videos)
+# -----------------------------------------------------------------------------
+def save_short_record(short_data: Dict[str, Any]) -> str:
+    """Save a Shorts upload record to the yt_shorts tab (upsert).
+
+    Kept separate from yt_videos so a Short's status/failure never
+    touches the long video's record and vice versa. ``short_data``
+    needs ``parent_topic`` (the day's long-form topic), ``topic``
+    (this Short's angle), ``yt_video_id``, ``yt_url``, ``title``;
+    anything else lands in ``extra_json``.
+    """
+    short_id = short_data.get("short_id") or (
+        f"short_{hashlib.md5(str(time.time()).encode()).hexdigest()[:8]}"
+    )
+    short_data["short_id"] = short_id
+    short_data.setdefault("status", "pending_approval")
+    short_data.setdefault("created_at", int(time.time()))
+
+    known = [c for c in TAB_HEADERS["yt_shorts"] if c != "extra_json"]
+    row, extra = _split_known_extra(short_data, known)
+    row["extra_json"] = extra
+    _upsert_row("yt_shorts", "short_id", row)
+    logger.info("Short record saved to Google Sheets yt_shorts: {}", short_id)
+    return short_id
+
+
+def get_short_record(short_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a Shorts record by short_id."""
+    for row in _read_rows("yt_shorts"):
+        if row.get("short_id") == short_id:
+            rec = {k: v for k, v in row.items() if k != "extra_json"}
+            rec.update(row.get("extra_json") or {})
+            return rec
+    return None
+
+
+def update_short_status(short_id: str, status: str, published_at: Optional[int] = None) -> bool:
+    """Update a Short's status (pending_approval, public, rejected, failed)."""
+    for row_number, row in _read_rows_indexed("yt_shorts"):
+        if row.get("short_id") == short_id:
+            row["status"] = status
+            if published_at:
+                row["published_at"] = published_at
+            _update_row("yt_shorts", row_number, row)
+            return True
+    return False
+
+
+def list_recent_shorts(limit: int = 10) -> List[Dict[str, Any]]:
+    """Retrieve recent Shorts records, newest first."""
+    items = []
+    for row in _read_rows("yt_shorts"):
+        rec = {k: v for k, v in row.items() if k != "extra_json"}
+        rec.update(row.get("extra_json") or {})
+        items.append(rec)
+    items.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+    return items[:limit]

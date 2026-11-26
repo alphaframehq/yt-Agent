@@ -31,6 +31,23 @@ Chart Types:
 6. competitor_matrix(companies, metrics)
 7. growth_margin_scatter(companies)
 8. market_share_donut(shares_dict)
+9. ai_source_coverage(labels, counts, topic) — AI topics only
+10. ai_source_share(labels, counts, topic) — AI topics only
+
+AI TOPICS (pillar ``ai_everything``): financials and market_data in the
+bundle are explicit 0.0 "not applicable" sentinels, so chart types 1-8
+CANNOT render for AI topics — they raise ValueError on the missing keys
+instead of plotting fabricated data. The only honest graphs for an AI
+topic come from data the research actually retrieved:
+- ``ai_source_coverage`` / ``ai_source_share``: counts of retrieved
+  TinyFish articles per publisher (``bundle.sources[].source``), built
+  by ``agents.visuals.ai_topic_chart_data()``.
+- A trend/interest-over-time chart is NOT available: TinyFish articles
+  carry ``published_at``, but ``agents/research.py`` ``_run_ai_topic``
+  drops it when building ``SourceInfo``, and trend items
+  (``tools/trends.py`` ``TrendItem``) carry no date either, so no dated
+  series exists in the bundle. Do not fabricate dates. Until research
+  carries ``published_at`` into the bundle, no dated chart may be plotted.
 """
 
 from __future__ import annotations
@@ -49,9 +66,34 @@ __all__ = [
     "competitor_matrix",
     "growth_margin_scatter",
     "market_share_donut",
+    "ai_source_coverage",
+    "ai_source_share",
     "generate_chart_by_type",
     "chart_to_clip",
+    "AI_CHART_TYPES",
+    "FINANCE_CHART_TYPES",
 ]
+
+# Chart types that need company financials / market data. They raise
+# ValueError for ai_everything topics, whose bundle carries 0.0
+# "not applicable" sentinels instead of financials — never plot fake data.
+FINANCE_CHART_TYPES = (
+    "revenue_trend",
+    "segment_breakdown",
+    "margin_compare",
+    "unit_economics_waterfall",
+    "scope_tam",
+    "competitor_matrix",
+    "growth_margin_scatter",
+    "market_share_donut",
+)
+
+# Chart types that render from real retrieved-article data and are the
+# only types available for ai_everything topics.
+AI_CHART_TYPES = (
+    "ai_source_coverage",
+    "ai_source_share",
+)
 
 CHART_DIR = Path("cache/charts")
 CHART_DIR.mkdir(parents=True, exist_ok=True)
@@ -362,17 +404,135 @@ def market_share_donut(shares_dict: Dict[str, float]) -> str:
         raise
 
 
+def ai_source_coverage(labels: List[str], counts: List[int], topic: str) -> str:
+    """Chart 9 (AI topics only): retrieved-article coverage per publisher.
+
+    ``labels``/``counts`` are real counts of retrieved TinyFish articles
+    per publisher, built by ``agents.visuals.ai_topic_chart_data()`` —
+    never fabricated. A publisher with zero retrieved articles simply
+    does not appear; counts are never invented to fill the chart.
+    """
+    try:
+        import matplotlib.pyplot as plt
+
+        if not labels or not counts or len(labels) != len(counts):
+            raise ValueError(
+                "ai_source_coverage: 'labels' and 'counts' must be "
+                "non-empty lists of the same length."
+            )
+        if any(c < 0 for c in counts):
+            raise ValueError("ai_source_coverage: counts must be >= 0.")
+
+        fig, ax = _setup_figure()
+        colors = [ACCENT_CYAN, ACCENT_CORAL, "#7928CA", "#FF0080", "#0070F3"]
+        bar_colors = [colors[i % len(colors)] for i in range(len(labels))]
+        bars = ax.barh(labels, counts, color=bar_colors, height=0.55)
+
+        for bar in bars:
+            width = bar.get_width()
+            ax.text(
+                width + 0.1,
+                bar.get_y() + bar.get_height() / 2,
+                f"{int(width)}",
+                va="center",
+                color=FG_COLOR,
+                fontweight="bold",
+            )
+
+        ax.set_xlim(0, max(counts) * 1.2 + 0.5)
+        ax.set_xlabel("Retrieved articles", color=FG_COLOR)
+        ax.set_title(
+            f"{topic.upper()[:60]} // SOURCE COVERAGE (RETRIEVED ARTICLES)",
+            color=FG_COLOR,
+            fontsize=14,
+            pad=15,
+        )
+        slug = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30].strip("_")
+        return _save_chart(fig, f"ai_source_coverage_{slug or 'topic'}.png")
+    except Exception as e:
+        logger.error(f"Failed to generate ai_source_coverage chart: {e}")
+        raise
+
+
+def ai_source_share(labels: List[str], counts: List[int], topic: str) -> str:
+    """Chart 10 (AI topics only): share of retrieved articles per publisher.
+
+    Same real counts as :func:`ai_source_coverage`, rendered as a donut
+    of each publisher's share of all retrieved articles for the topic.
+    """
+    try:
+        import matplotlib.pyplot as plt
+
+        if not labels or not counts or len(labels) != len(counts):
+            raise ValueError(
+                "ai_source_share: 'labels' and 'counts' must be "
+                "non-empty lists of the same length."
+            )
+        if any(c < 0 for c in counts) or sum(counts) <= 0:
+            raise ValueError("ai_source_share: counts must be >= 0 with a positive total.")
+
+        fig, ax = _setup_figure()
+        colors = [ACCENT_CYAN, ACCENT_CORAL, "#7928CA", "#0070F3", "#FF0080"]
+        pie_colors = [colors[i % len(colors)] for i in range(len(labels))]
+
+        wedges, texts, autotexts = ax.pie(
+            counts,
+            labels=labels,
+            autopct="%1.0f%%",
+            startangle=90,
+            colors=pie_colors,
+            pctdistance=0.75,
+            wedgeprops={"width": 0.45, "edgecolor": BG_COLOR, "linewidth": 2},
+        )
+        for t in texts:
+            t.set_color(FG_COLOR)
+        for at in autotexts:
+            at.set_color(FG_COLOR)
+            at.set_fontweight("bold")
+
+        ax.set_title(
+            f"{topic.upper()[:60]} // SHARE OF RETRIEVED ARTICLES BY SOURCE",
+            color=FG_COLOR,
+            fontsize=14,
+            pad=15,
+        )
+        slug = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30].strip("_")
+        return _save_chart(fig, f"ai_source_share_{slug or 'topic'}.png")
+    except Exception as e:
+        logger.error(f"Failed to generate ai_source_share chart: {e}")
+        raise
+
+
 def generate_chart_by_type(chart_type: str, data: Optional[Dict[str, Any]] = None) -> str:
     """Dynamic router generating any of the 8 chart types from bundle data.
 
     P0 #10: `data` is mandatory and must carry every value the chart plots.
     Any missing key raises ValueError — no hardcoded defaults are used.
+
+    AI topics (pillar ``ai_everything``): only ``ai_source_coverage``
+    and ``ai_source_share`` are available — they plot real retrieved
+    article counts. The 8 finance types raise ValueError for AI data
+    (their required keys are absent) instead of plotting fabricated
+    figures; a dated trend/interest chart is unavailable until research
+    carries ``published_at`` into the bundle (see module docstring).
     """
     if data is None:
         raise ValueError(
             f"generate_chart_by_type('{chart_type}'): 'data' is required — "
             "charts must be built from the ResearchBundle, no hardcoded defaults."
         )
+
+    if chart_type == "ai_source_coverage":
+        labels = _require(data, "source_labels", chart_type)
+        counts = _require(data, "source_counts", chart_type)
+        topic = data.get("topic", "AI topic")
+        return ai_source_coverage(labels, counts, topic)
+
+    elif chart_type == "ai_source_share":
+        labels = _require(data, "source_labels", chart_type)
+        counts = _require(data, "source_counts", chart_type)
+        topic = data.get("topic", "AI topic")
+        return ai_source_share(labels, counts, topic)
 
     if chart_type == "revenue_trend":
         company = _require(data, "company", chart_type)
@@ -423,16 +583,40 @@ def generate_chart_by_type(chart_type: str, data: Optional[Dict[str, Any]] = Non
             f"generate_chart_by_type: unknown chart type '{chart_type}'. "
             "Valid types: revenue_trend, segment_breakdown, margin_compare, "
             "unit_economics_waterfall, scope_tam, competitor_matrix, "
-            "growth_margin_scatter, market_share_donut."
+            "growth_margin_scatter, market_share_donut, ai_source_coverage, "
+            "ai_source_share. Finance types require financials and are "
+            "unavailable for ai_everything topics; AI types require "
+            "'source_labels'/'source_counts' from real retrieved articles."
         )
 
 
 def chart_to_clip(png_path: str, duration: float) -> Any:
-    """Convert a chart PNG into an animated video clip with subtle cinematic zoom."""
+    """Convert a chart PNG into an animated video clip.
+
+    Applies the same motion treatment as the assembler: a Ken Burns
+    zoom/pan (so the chart never sits static) plus a 0.8s fade-in.
+    If MoviePy or the motion helper is unavailable, falls back to a
+    plain still clip — and if even that fails, returns the PNG path so
+    the caller can decide; it never claims motion it did not apply.
+    """
     try:
         from moviepy.editor import ImageClip
-        clip = ImageClip(png_path).set_duration(duration)
-        return clip
+
+        try:
+            from agents.assemble import (
+                CHART_FADEIN_SEC,
+                _ken_burns_clip,
+            )
+
+            clip = _ken_burns_clip(png_path, duration)
+            return clip.fadein(CHART_FADEIN_SEC)
+        except Exception as e:
+            logger.warning(
+                f"Ken Burns unavailable for chart clip {png_path} ({e}); "
+                "using a plain still clip with fade-in."
+            )
+            clip = ImageClip(png_path).set_duration(duration)
+            return clip.fadein(0.8)
     except Exception as e:
         logger.warning(f"MoviePy ImageClip not available or failed: {e}")
         return png_path

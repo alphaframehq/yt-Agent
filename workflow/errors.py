@@ -35,6 +35,21 @@ def classify_error(exc: Exception) -> ErrorClass:
     msg = str(exc).lower()
     exc_type = type(exc).__name__.lower()
 
+    # 0. Safety refusal / blocked content (26 Nov 2026): a Gemini
+    # SAFETY block, or a topic the filter rejected, is final. It must
+    # never be retried, re-prompted, or healed — the topic itself is
+    # unproduceable. FATAL -> the healer aborts the stage immediately.
+    if any(k in msg for k in (
+        "safety",
+        "safetyblocked",
+        "blocked-term",
+        "blockreason",
+        "finishreason=safety",
+        "content blocked",
+        "prompt was blocked",
+    )):
+        return ErrorClass.FATAL
+
     # 1. Invalid Key / Authentication failure
     if any(k in msg for k in ("401", "403", "unauthorized", "forbidden", "invalid api key", "invalid_api_key", "authentication failed")):
         return ErrorClass.INVALID_KEY

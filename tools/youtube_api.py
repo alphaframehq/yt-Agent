@@ -30,6 +30,7 @@ Handles:
 - Competitor topic analysis (search.list + videos.list)
 - Private video uploads with thumbnail attachments
 - Publication status transitions (Private -> Public)
+- Description updates for internal linking (videos.update)
 - Deletion / purge operations
 
 Auth: OAuth2 user credentials (refresh-token flow) for channel
@@ -42,15 +43,69 @@ uploads, publish or delete.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+_T = TypeVar("_T")
+
+# 26 Nov 2026: there is no PR #3 in this repo's history (merges are
+# #1, #2, #4–#8), and only research_topic() had any retry — a bare
+# @retry that retried EVERYTHING, including missing credentials.
+# The retry/backoff below is added here, for all five YouTube API
+# entry points, and it retries TRANSIENT failures only (5xx / 429 /
+# timeouts / connection resets). Auth failures (401/403,
+# invalid_grant, missing YT_* env vars) are permanent and are never
+# retried: retrying them only burns quota and delays the loud error
+# that tells the operator to re-issue the refresh token.
+_TRANSIENT_MARKERS: tuple[str, ...] = (
+    "429", "500", "502", "503", "504",
+    "rate limit", "rate-limit", "ratelimit",
+    "too many requests", "timeout", "timed out",
+    "connection reset", "connection refused", "connection aborted",
+    "service unavailable", "internal server error", "internal error",
+    "backend error", "bad gateway", "gateway timeout",
+    "temporarily unavailable", "eof occurred", "broken pipe",
+)
+_PERMANENT_MARKERS: tuple[str, ...] = (
+    "invalid_grant", "invalid grant", "credentials missing",
+    "not set (or empty)", "not set in the environment",
+    "unauthorized", "forbidden", "invalid credentials",
+    "401", "403", "404",
+)
+
+
+def _is_transient_youtube_error(exc: BaseException) -> bool:
+    """Return True only for a retryable YouTube API failure."""
+    msg = str(exc).lower()
+    if any(marker in msg for marker in _PERMANENT_MARKERS):
+        return False
+    return any(marker in msg for marker in _TRANSIENT_MARKERS)
+
+
+def _youtube_retry(fn: Callable[..., _T]) -> Callable[..., _T]:
+    """Tenacity retry for raising YouTube calls: 3 attempts, exp backoff."""
+    return retry(
+        retry=retry_if_exception(_is_transient_youtube_error),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True,
+    )(fn)
 
 __all__ = [
     "research_topic",
     "upload_private",
+    "upload_short",
+    "shorts_seo",
     "publish_public",
+    "update_video_description",
     "delete_video",
     "verify_video_exists",
 ]
@@ -147,7 +202,7 @@ def _get_youtube_service():
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=5))
+@_youtube_retry
 def research_topic(topic: str) -> Dict[str, Any]:
     """Analyze YouTube landscape for topic: top titles, tags, and audience gaps.
 
@@ -196,8 +251,13 @@ def research_topic(topic: str) -> Dict[str, Any]:
     }
 
 
+@_youtube_retry
 def upload_private(video_path: str, thumb_path: Optional[str], seo_data: Dict[str, Any]) -> str:
     """Upload video to YouTube set to PRIVATE status (real resumable upload).
+
+    Retried (transient failures only, 3 attempts) via @_youtube_retry:
+    a retried upload starts a fresh resumable session — the abandoned
+    partial upload never completes, so no duplicate video is created.
 
     Title/description/tags come ONLY from seo_data (the script bundle's
     SEO, produced by the LLM from the real research bundle). The title
@@ -289,6 +349,60 @@ def upload_private(video_path: str, thumb_path: Optional[str], seo_data: Dict[st
     return video_id
 
 
+def shorts_seo(seo_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of *seo_data* adjusted for a YouTube Short.
+
+    Pure function (no API call), so it is unit-testable:
+
+    - ``#Shorts`` is added to the title (once) and to the start of
+      the description (once) — YouTube treats #Shorts in the title
+      or description as the Shorts signal.
+    - The title is kept within YouTube's 100-character limit: if
+      appending " #Shorts" would overflow, the base title is
+      truncated first. The title itself is never invented here — it
+      comes from the Shorts script's SEO.
+    - A "shorts" tag is added (once) so Shorts stay discoverable
+      alongside the long video's tags.
+    """
+    seo = dict(seo_data or {})
+    title = str(seo.get("title") or "").strip()
+    if not title:
+        raise ValueError(
+            "Refusing Shorts SEO: seo_data has no title. The title must "
+            "come from the Shorts script's SEO — no default is invented."
+        )
+    if "#Shorts" not in title:
+        suffix = " #Shorts"
+        title = (title[: 100 - len(suffix)] + suffix) if len(title) + len(suffix) > 100 else title + suffix
+    seo["title"] = title
+    description = str(seo.get("description") or "")
+    if "#Shorts" not in description:
+        seo["description"] = "#Shorts\n\n" + description
+    tags = [str(t).strip() for t in (seo.get("tags") or []) if str(t).strip()]
+    if "shorts" not in [t.lower() for t in tags]:
+        tags.append("shorts")
+    seo["tags"] = tags
+    return seo
+
+
+def upload_short(video_path: str, thumb_path: Optional[str], seo_data: Dict[str, Any]) -> str:
+    """Upload a vertical 9:16 video as a YouTube Short (PRIVATE).
+
+    Separate upload path from the long-form ``upload_private``: the
+    SEO is passed through :func:`shorts_seo` first, so every Short
+    carries ``#Shorts`` in its title and description. The video file
+    itself must already be a vertical render (``agents.assemble.
+    assemble_shorts`` renders 1080x1920); this function does not
+    re-encode or crop — a non-vertical file is the assembler's
+    responsibility, not the uploader's silent fix.
+
+    Returns the real YouTube video ID; raises exactly like
+    ``upload_private`` on any failure (no fake ID, ever).
+    """
+    return upload_private(video_path, thumb_path, shorts_seo(seo_data))
+
+
+@_youtube_retry
 def verify_video_exists(yt_video_id: str) -> bool:
     """Confirm a video ID really exists on YouTube (videos.list).
 
@@ -313,36 +427,124 @@ def publish_public(yt_video_id: str) -> bool:
     """Change video privacyStatus from PRIVATE to PUBLIC.
 
     Raises when unauthenticated. Returns False only for a real API
-    failure.
+    failure. Transient failures (5xx/429/timeout) are retried
+    internally (3 attempts, exponential backoff) before giving up
+    with False — the False contract for callers is unchanged.
     """
     logger.info(f"Publishing YouTube video {yt_video_id} to PUBLIC.")
     # Raises RuntimeError when unauthenticated — deliberately outside
     # the try/except so it is never converted into a False/True.
     service = _get_youtube_service()
-    try:
-        service.videos().update(
-            part="status",
-            body={"id": yt_video_id, "status": {"privacyStatus": "public"}},
-        ).execute()
-        return True
-    except Exception as e:
-        logger.error(f"Failed to publish video {yt_video_id}: {e}")
-        return False
+    for attempt in range(1, 4):
+        try:
+            service.videos().update(
+                part="status",
+                body={"id": yt_video_id, "status": {"privacyStatus": "public"}},
+            ).execute()
+            return True
+        except Exception as e:
+            if _is_transient_youtube_error(e) and attempt < 3:
+                delay = min(2 ** attempt, 10)
+                logger.warning(
+                    f"Publish failed transiently ({e}); retrying in "
+                    f"{delay}s (attempt {attempt}/3)."
+                )
+                time.sleep(delay)
+                continue
+            logger.error(f"Failed to publish video {yt_video_id}: {e}")
+            return False
+    return False
+
+
+def update_video_description(yt_video_id: str, description: str) -> bool:
+    """Replace a video's description, preserving title/tags/category.
+
+    Internal-linking step (26 Nov 2026): Shorts video IDs exist only
+    AFTER upload, so the long video's description cannot link them at
+    upload time. The daily runner uploads the long video first, then
+    the Shorts, then calls this (via
+    ``agents/uploader.cross_link_daily_uploads``) to add the Shorts
+    links to the long video's description.
+
+    The current snippet is fetched first (videos.list) so title,
+    tags and categoryId are preserved — videos.update replaces the
+    whole snippet, and sending only a description would drop them.
+    The description is truncated to YouTube's 5000-character limit.
+
+    Returns True on success, False on a real API failure (the caller
+    logs and continues — the videos exist; only the links are
+    missing). Raises on unauthenticated service, simulated IDs, or
+    a video ID the API does not know. Transient failures are retried
+    internally (3 attempts, exponential backoff).
+    """
+    if not yt_video_id or str(yt_video_id).startswith(("yt_sim_", "yt_priv_")):
+        raise ValueError(
+            f"Refusing to update description for simulated video ID "
+            f"'{yt_video_id}': only real YouTube IDs can be updated."
+        )
+    description = str(description or "")[:5000]
+    logger.info(f"Updating description for YouTube video {yt_video_id}.")
+    # Raises RuntimeError when unauthenticated — deliberately outside
+    # the try/except so it is never converted into a False/True.
+    service = _get_youtube_service()
+    response = service.videos().list(part="snippet", id=yt_video_id).execute()
+    items = response.get("items", [])
+    if not items:
+        raise ValueError(
+            f"YouTube video not found (videos.list returned nothing): {yt_video_id}"
+        )
+    snippet = dict(items[0].get("snippet") or {})
+    if not str(snippet.get("title") or "").strip():
+        raise ValueError(
+            f"YouTube video {yt_video_id} has no title in its snippet; "
+            "refusing to update the description without one."
+        )
+    snippet["description"] = description
+    for attempt in range(1, 4):
+        try:
+            service.videos().update(
+                part="snippet",
+                body={"id": yt_video_id, "snippet": snippet},
+            ).execute()
+            return True
+        except Exception as e:
+            if _is_transient_youtube_error(e) and attempt < 3:
+                delay = min(2 ** attempt, 10)
+                logger.warning(
+                    f"Description update failed transiently ({e}); retrying in "
+                    f"{delay}s (attempt {attempt}/3)."
+                )
+                time.sleep(delay)
+                continue
+            logger.error(f"Failed to update description for video {yt_video_id}: {e}")
+            return False
+    return False
 
 
 def delete_video(yt_video_id: str) -> bool:
     """Delete video from YouTube.
 
     Raises when unauthenticated. Returns False only for a real API
-    failure.
+    failure. Transient failures are retried internally (3 attempts,
+    exponential backoff) before giving up with False.
     """
     logger.info(f"Deleting YouTube video {yt_video_id}.")
     # Raises RuntimeError when unauthenticated — deliberately outside
     # the try/except so it is never converted into a False/True.
     service = _get_youtube_service()
-    try:
-        service.videos().delete(id=yt_video_id).execute()
-        return True
-    except Exception as e:
-        logger.error(f"Failed to delete video {yt_video_id}: {e}")
-        return False
+    for attempt in range(1, 4):
+        try:
+            service.videos().delete(id=yt_video_id).execute()
+            return True
+        except Exception as e:
+            if _is_transient_youtube_error(e) and attempt < 3:
+                delay = min(2 ** attempt, 10)
+                logger.warning(
+                    f"Delete failed transiently ({e}); retrying in "
+                    f"{delay}s (attempt {attempt}/3)."
+                )
+                time.sleep(delay)
+                continue
+            logger.error(f"Failed to delete video {yt_video_id}: {e}")
+            return False
+    return False

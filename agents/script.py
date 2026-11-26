@@ -11,12 +11,15 @@
 """Agent 2: Script Agent for TubePilot AI.
 
 Transforms a verified `ResearchBundle` into:
-1. Long-form documentary `VideoScript` (8-12 minutes, 8+ chart scenes, strict provenance)
+1. Long-form documentary `VideoScript` (8-12 minutes, pillar-appropriate
+   visuals — 8+ chart scenes for finance pillars, optional AI-native
+   charts for ai_everything — strict provenance)
 2. Daily short-form `ShortsScript` instances (60s max, 9:16 vertical aspect ratio)
 
 Adheres strictly to editorial pillar section orders:
 - finance_to_technical: hook -> the_problem -> technical_solution -> financial_benefit -> scope_and_moat -> risks -> disclaimer -> cta
 - tech_to_financial: hook -> what_it_does -> revenue_breakdown -> unit_economics -> scope_and_trajectory -> risks -> disclaimer -> cta
+- ai_everything: hook -> what_changed -> how_it_works -> why_it_matters -> risks_and_scams -> predictions -> disclaimer -> cta
 
 All narration numbers come from the ResearchBundle via a real LLM call.
 There is no template fallback: if the LLM is unavailable, generation raises.
@@ -42,6 +45,7 @@ __all__ = ["ScriptAgent", "run_script", "generate_shorts"]
 
 PROMPT_FINANCE_PATH = Path("prompts/script_finance_to_technical.txt")
 PROMPT_TECH_PATH = Path("prompts/script_tech_to_financial.txt")
+PROMPT_AI_PATH = Path("prompts/script_ai_everything.txt")
 
 DISCLAIMER_TEXT = (
     "DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. "
@@ -104,6 +108,11 @@ def _bundle_context(bundle: ResearchBundle) -> str:
         "sources": [s.model_dump() for s in bundle.sources],
         "yt_insights": bundle.yt_insights.model_dump(),
         "research_confidence": bundle.research_confidence,
+        # Current-trend angles from the pre-script trend-research step
+        # (tools/trends.py). Editorial hooks only — no numbers may be
+        # taken from here; figures still come only from the bundle.
+        "trend_angles": list(getattr(bundle, "trend_angles", []) or []),
+        "trend_sources": list(getattr(bundle, "trend_sources", []) or []),
     }
     return json.dumps(payload, indent=2, default=str)
 
@@ -141,19 +150,28 @@ class ScriptAgent:
     def __init__(self):
         pass
 
-    def run(self, bundle: ResearchBundle) -> VideoScript:
+    def run(self, bundle: ResearchBundle, trend_report: Any = None) -> VideoScript:
         """Generate longform VideoScript from ResearchBundle via LLM.
 
         Raises (never falls back to a template) if the prompt file is
         missing, every LLM provider in the chain fails, or the returned
         script fails post-generation validation.
+
+        ``trend_report`` (optional TrendReport from tools/trends.py,
+        already attached to ``bundle.trend_angles`` by the pipeline
+        trend node) steers the hook/angle toward what is trending
+        today; it never supplies numbers.
         """
         logger.info(f"Generating VideoScript for '{bundle.topic}' (Pillar: {bundle.pillar})")
 
         prompt_path = (
-            PROMPT_FINANCE_PATH
-            if bundle.pillar == "finance_to_technical"
-            else PROMPT_TECH_PATH
+            PROMPT_AI_PATH
+            if bundle.pillar == "ai_everything"
+            else (
+                PROMPT_FINANCE_PATH
+                if bundle.pillar == "finance_to_technical"
+                else PROMPT_TECH_PATH
+            )
         )
         system_prompt = _load_prompt(prompt_path)
 
@@ -173,6 +191,17 @@ class ScriptAgent:
             "(use no figure that is not in here):\n"
             f"{_bundle_context(bundle)}\n\n"
             "RULES:\n"
+            "- HOOK (first 3 seconds): the 'hook' scene MUST open with a "
+            "concrete, surprising, bundle-grounded claim — the single most "
+            "startling verified fact from the research bundle (name the "
+            "tool, model, paper, leak or event AND its concrete "
+            "consequence) in the very first sentence. NEVER open with a "
+            "generic intro: 'In this video…', 'In today's video…', "
+            "'Welcome to…', 'Hello everyone…', \"Today we're going to…\", "
+            "'Let's talk about…', 'This video is about…', 'Join me as…', "
+            "'Before we begin…'. No throat-clearing, no greeting, no "
+            "roadmap sentence. The hook must be a full sentence (10+ "
+            "words) naming a specific thing or number from the bundle.\n"
             "- Every number in the narration MUST come from the research bundle above "
             "and MUST cite the matching claim_id from bundle.sources.\n"
             "- Do NOT invent revenue, margin, growth, TAM, penetration, take-rate or "
@@ -183,6 +212,16 @@ class ScriptAgent:
             "- Include one 'disclaimer' scene whose narration is exactly:\n"
             f'"{DISCLAIMER_TEXT}"\n'
             f"- End with a 'cta' scene using this outro line: \"{cta_outro}\"\n"
+            "- Include exactly one verbal internal link in the 'why_it_matters' or "
+            "'cta' scene (e.g. \"is topic par hamari ye video dekho — link description "
+            "mein hai\"), plus the matching on-screen cue in that scene's visual_prompt "
+            "('on-screen text: Watch next on this channel'). NEVER invent a specific "
+            "video title, URL, or video ID for the link — no channel catalogue is in "
+            "the research bundle; use only this generic pointer.\n"
+            "- Visuals follow the pillar prompt: finance pillars need 8+ chart scenes; "
+            "ai_everything uses optional AI-native charts only (ai_source_coverage / "
+            "ai_source_share, each at most once) and diagram / ai_image for the rest — "
+            "never a finance chart type for an AI topic.\n"
             "- The SEO description must be 300+ words and start with the disclaimer "
             "text above.\n"
             "- Output ONLY raw JSON conforming to the VideoScript schema "
@@ -200,13 +239,25 @@ class ScriptAgent:
         )
         return script
 
-    def generate_shorts(self, bundle: ResearchBundle, count: int = 3) -> List[ShortsScript]:
+    def generate_shorts(
+        self, bundle: ResearchBundle, count: int = 3, trend_report: Any = None
+    ) -> List[ShortsScript]:
         """Generate `count` high-retention YouTube Shorts (60s max, 9:16) via LLM.
 
-        Short angles are chosen by the LLM from the research bundle (unit
-        economics, growth vs margins, market scope, competitor comparison,
-        ...), not from fixed templates. Raises if the LLM is unavailable or
+        Short angles are chosen by the LLM from the research bundle
+        (a new tool/capability, a training breakthrough, a scam/fraud
+        warning, a prediction, pros vs cons, a leak, ...), not from
+        fixed templates. Raises if the LLM is unavailable or
         returns fewer Shorts than requested — never pads with template Shorts.
+
+        CHOICE (daily-output design, 26 Nov 2026): the 3 Shorts derive
+        from the SAME day's topic/research as the long video — one
+        research pass, one coherent channel day, and each Short teases
+        one angle of the long video (with the trend angles steering
+        which hooks lead). Distinct short topics would need 3 extra
+        research + script cycles and 3x the LLM/time cost inside the
+        60-minute daily job. ``trend_report`` (optional TrendReport)
+        steers the Shorts' hooks toward today's trending angles.
         """
         logger.info(f"Generating {count} YouTube Shorts for '{bundle.topic}'")
         branding = get_channel_branding()
@@ -218,6 +269,9 @@ class ScriptAgent:
             "You are the Senior Script Agent for TubePilot AI, writing short-form "
             "YouTube Shorts (60 seconds max, 9:16 vertical aspect ratio). "
             "Each Short has at most 3 scenes and total duration of at most 60 seconds. "
+            "HOOK RULE: every Short opens in its first 1 second with a concrete, "
+            "surprising, bundle-grounded claim — never a generic intro "
+            "('In this video…', 'Welcome to…', 'Today we're going to…'). "
             "Tone: cold, analytical, engineering-first, cinematic. "
             "TTS-ready: no emojis, no markdown symbols (*, _, #) inside narration. "
             "NEVER use forbidden phrases: 'buy', 'sell', 'invest in', 'guaranteed', "
@@ -226,20 +280,55 @@ class ScriptAgent:
             "The SEO description of each Short must be 300+ words and start with "
             "the compliance disclaimer."
         )
+        # Short angles are chosen by the LLM from the research bundle.
+        # The examples differ by pillar: finance topics get economics
+        # angles, AI topics get tool/discovery/scam/prediction angles.
+        if bundle.pillar == "ai_everything":
+            angle_hint = (
+                "the new tool or discovery, how it actually works, "
+                "a scam / red-flag check, a prediction or strategy "
+                "takeaway, or a pros-vs-cons breakdown"
+            )
+        else:
+            angle_hint = (
+                "unit economics / take rate, revenue growth vs margins, "
+                "market scope (TAM vs penetration), or a competitor "
+                "comparison"
+            )
+        trend_block = ""
+        if trend_report is not None:
+            angles = list(getattr(trend_report, "angles", []) or [])
+            if angles:
+                trend_block = (
+                    "\nTODAY'S TRENDING ANGLES — lead the Shorts' hooks with "
+                    "these where they fit the bundle (editorial hooks only; "
+                    "no numbers come from here):\n"
+                    + "\n".join(f"- {a}" for a in angles)
+                    + "\n"
+                )
         user_prompt = (
             f"Write {count} distinct YouTube Shorts about '{bundle.topic}' "
             f"(pillar: {bundle.pillar}) for channel '{channel_name}'.\n\n"
-            "Choose each Short's angle from the research bundle below — e.g. unit "
-            "economics / take rate, revenue growth vs margins, market scope "
-            "(TAM vs penetration), or a competitor comparison. Do NOT reuse fixed "
-            "angles or fixed numbers.\n\n"
+            "Choose each Short's angle from the research bundle below — e.g. "
+            f"{angle_hint}. Do NOT reuse fixed "
+            "angles or fixed numbers.\n"
+            f"{trend_block}\n"
             "RESEARCH BUNDLE — the ONLY source of numbers, claims and citations:\n"
             f"{_bundle_context(bundle)}\n\n"
             "RULES:\n"
+            "- HOOK (first 1 second): every Short MUST open with a concrete, "
+            "surprising, bundle-grounded claim in its very first words — "
+            "the single most startling verified fact from the research "
+            "bundle. NEVER open with a generic intro: 'In this video…', "
+            "'Welcome to…', 'Hello everyone…', \"Today we're going to…\", "
+            "'Let's talk about…'. No throat-clearing before the claim.\n"
             "- Every number MUST come from the research bundle above and MUST cite "
             "the matching claim_id from bundle.sources.\n"
             "- Do NOT invent figures. Do NOT claim verification against SEC EDGAR "
             "filings or any source not listed in bundle.sources.\n"
+            "- Each Short's closing scene points at the full long video on the same "
+            "topic (e.g. \"full breakdown hamari long video mein hai — link in "
+            "description\"), never inventing a title or URL.\n"
             f"- Start every Short's SEO description with this disclaimer text: \"{DISCLAIMER_TEXT}\"\n"
             f"- Use this subscribe line in the Shorts' closing: \"{short_subscribe_cta}\"\n"
             "- Output ONLY raw JSON conforming to the schema {\"shorts\": [...]} "
@@ -267,9 +356,11 @@ class ScriptAgent:
         return shorts
 
 
-def run_script(bundle: ResearchBundle) -> VideoScript:
-    return ScriptAgent().run(bundle)
+def run_script(bundle: ResearchBundle, trend_report: Any = None) -> VideoScript:
+    return ScriptAgent().run(bundle, trend_report=trend_report)
 
 
-def generate_shorts(bundle: ResearchBundle, count: int = 3) -> List[ShortsScript]:
-    return ScriptAgent().generate_shorts(bundle, count=count)
+def generate_shorts(
+    bundle: ResearchBundle, count: int = 3, trend_report: Any = None
+) -> List[ShortsScript]:
+    return ScriptAgent().generate_shorts(bundle, count=count, trend_report=trend_report)

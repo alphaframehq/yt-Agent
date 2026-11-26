@@ -1,7 +1,7 @@
-"""Google Sheets 8-Tab Provisioned Setup Script for TubePilot AI.
+"""Google Sheets 10-Tab Provisioned Setup Script for TubePilot AI.
 
 Replaces ``db/setup_dynamo.py`` (25 Nov 2026 — DynamoDB removed
-entirely). Creates the 8 ``yt_*`` tabs in the spreadsheet named by
+entirely). Creates the 10 ``yt_*`` tabs in the spreadsheet named by
 ``GOOGLE_SHEETS_ID`` (see ``db/sheets.py`` ``TAB_HEADERS``) and ensures
 each tab's first row holds the expected headers.
 
@@ -15,6 +15,8 @@ Tabs:
 6. yt_bot_requests
 7. yt_topics_queue
 8. yt_insights
+9. yt_trends (daily trend-research reports)
+10. yt_shorts (Shorts upload/status tracking, separate from yt_videos)
 
 Auth: service-account JSON from ``GOOGLE_SERVICE_ACCOUNT_JSON`` (raw
 JSON string or path to a ``.json`` key file). The service account must
@@ -100,7 +102,7 @@ def _ensure_headers(service: object, sheet_id: str, title: str) -> None:
 
 
 def setup_all_sheets() -> Dict[str, str]:
-    """Idempotently create all 8 tabs with headers and verify them."""
+    """Idempotently create all tabs with headers and verify them."""
     # Resolved via the db.sheets module attribute (not a from-import)
     # so tests can patch db.sheets._get_service with a fake.
     service = _sheets._get_service()  # raises if env/credentials are missing
@@ -120,8 +122,8 @@ def setup_all_sheets() -> Dict[str, str]:
             f"Google Sheets tabs missing after setup: {', '.join(missing)}"
         )
 
-    logger.info("All 8 Google Sheets tab configurations verified.")
-    return {"status": "success", "tabs": "8 tabs configured with headers"}
+    logger.info("All %d Google Sheets tab configurations verified.", len(_TAB_NAMES))
+    return {"status": "success", "tabs": f"{len(_TAB_NAMES)} tabs configured with headers"}
 
 
 if __name__ == "__main__":

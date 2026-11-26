@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from agents.charts import generate_chart_by_type
+from agents.charts import AI_CHART_TYPES, FINANCE_CHART_TYPES, generate_chart_by_type
 from config_manager import get_config
 from models.script import SceneInfo, VideoScript
 from tools.fal_ai import generate_fal_video
@@ -40,8 +40,45 @@ __all__ = [
     "VisualBudgetTracker",
     "VisualPipeline",
     "research_bundle_to_chart_data",
+    "ai_topic_chart_data",
     "resolve_scene_visuals",
 ]
+
+
+def ai_topic_chart_data(bundle: Any) -> Dict[str, Any]:
+    """Build the chart-data dict for AI (``ai_everything``) topics.
+
+    AI topics have no financials — the bundle carries 0.0 "not
+    applicable" sentinels — so the ONLY honest graph data is what
+    research actually retrieved: the count of TinyFish articles per
+    publisher (``bundle.sources[].source``). Returns the keys the
+    ``ai_source_coverage`` / ``ai_source_share`` chart types need.
+
+    Raises ValueError when the bundle has no sources at all: a chart
+    with no retrieved articles behind it would be fabricated.
+    """
+    if bundle is None:
+        raise ValueError(
+            "ai_topic_chart_data: no ResearchBundle — chart scenes "
+            "cannot be rendered without real research data."
+        )
+    sources = list(getattr(bundle, "sources", []) or [])
+    if not sources:
+        raise ValueError(
+            "ai_topic_chart_data: bundle has no sources — no retrieved "
+            "articles to count, so no AI chart can be rendered."
+        )
+    counts: Dict[str, int] = {}
+    for src in sources:
+        publisher = (getattr(src, "source", "") or "Unknown").strip() or "Unknown"
+        counts[publisher] = counts.get(publisher, 0) + 1
+    # Most-covered publishers first; deterministic order for equal counts.
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {
+        "topic": getattr(bundle, "topic", "AI topic"),
+        "source_labels": [label for label, _ in ranked],
+        "source_counts": [count for _, count in ranked],
+    }
 
 
 def research_bundle_to_chart_data(bundle: Any) -> Dict[str, Any]:
@@ -58,12 +95,20 @@ def research_bundle_to_chart_data(bundle: Any) -> Dict[str, Any]:
       so it is omitted; that chart type raises until a real source is wired.
     - competitor_matrix "metrics": only competitors whose metric is a
       take-rate are used; other competitor rows carry no take-rate value.
+    - AI topics (pillar ``ai_everything``): no financials exist, so this
+      returns :func:`ai_topic_chart_data` instead — real retrieved-article
+      counts per publisher, the only honest graph data for an AI topic.
+      The 8 finance chart types raise for that data (their keys are
+      absent); only ``ai_source_coverage`` / ``ai_source_share`` render.
     """
     if bundle is None:
         raise ValueError(
             "research_bundle_to_chart_data: no ResearchBundle — chart scenes "
             "cannot be rendered without real research data."
         )
+    if getattr(bundle, "pillar", None) == "ai_everything":
+        # AI topic: financials are 0.0 sentinels, never render them as figures.
+        return ai_topic_chart_data(bundle)
     fin = bundle.financials
     if not fin.revenue_by_year:
         raise ValueError(
@@ -155,7 +200,25 @@ class VisualPipeline:
 
         # 1. Chart ($0.00)
         if v_type == "chart":
-            chart_type = scene.chart_type or "revenue_trend"
+            is_ai_data = data is not None and "source_labels" in data
+            if scene.chart_type is None and is_ai_data:
+                # AI topics have no financials: default to the honest
+                # AI chart instead of revenue_trend (which would raise).
+                chart_type = "ai_source_coverage"
+            else:
+                chart_type = scene.chart_type or "revenue_trend"
+            if is_ai_data and chart_type in FINANCE_CHART_TYPES:
+                # Fail with a clear message instead of a bare missing-key
+                # error from the router: finance charts cannot render for
+                # AI topics — their bundle carries 0.0 sentinels, never
+                # real figures. Only AI_CHART_TYPES are available.
+                raise ValueError(
+                    f"Chart type '{chart_type}' is unavailable for "
+                    "ai_everything topics: the bundle has no financials "
+                    "(0.0 'not applicable' sentinels). Use one of "
+                    f"{list(AI_CHART_TYPES)} (real retrieved-article "
+                    "counts) instead of plotting fabricated figures."
+                )
             asset_path = generate_chart_by_type(chart_type, data=data)
             media_type = "image"
             cost = 0.0

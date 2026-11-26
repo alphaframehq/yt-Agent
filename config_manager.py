@@ -41,7 +41,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
         ["gemini", "gemini-3.5-flash-lite"],
         ["openrouter", "openrouter/free"],
     ],
-    "pillar_split": {"finance": 0.7, "tech": 0.3},
+    "pillar_split": {
+        # 26 Nov 2026 niche correction: the channel is AI, not finance.
+        # Editorial mix for the AI niche (fractions sum to 1.0). NOTE:
+        # nothing in the pipeline computes a content mix from this —
+        # it is read only for display (Telegram /status); the mix is
+        # a planning aid for which AI angles to queue, not a
+        # programmatic split.
+        "news_tools": 0.35,
+        "explainers_how_it_works": 0.25,
+        "scams_risks": 0.15,
+        "predictions_strategy": 0.15,
+        "leaks_conspiracy": 0.10,
+    },
     "budget_ai_per_video": 0.30,
     "voice": "Joanna",
     "schedule": "0 4 * * *",
@@ -109,11 +121,50 @@ def _load_full_config() -> dict[str, Any]:
         # An empty value cell reads back as None — treat it as "no
         # value stored" so it cannot wipe out a default.
         if key is not None and value is not None:
+            # 26 Nov 2026: a hand-edited / corrupt cell can decode to
+            # the wrong type (e.g. active_models stored as a plain
+            # string instead of a dict). Applying it verbatim used to
+            # crash validate_config() or, worse, downstream code with
+            # an AttributeError far from the cause. A stored value
+            # whose type disagrees with the default is ignored (with
+            # a warning) and the default is kept, so a bad row can
+            # never crash a run. Unknown keys (not in DEFAULT_CONFIG)
+            # are still accepted as-is.
+            if key in DEFAULT_CONFIG and not _value_matches_default(key, value):
+                logger.warning(
+                    "Ignoring yt_config row '{}': stored value {!r} "
+                    "has the wrong type (expected {}); keeping default.",
+                    key,
+                    value,
+                    type(DEFAULT_CONFIG[key]).__name__,
+                )
+                continue
             cfg[key] = value
     _cache = cfg
     _cache_ts = time.monotonic()
     logger.debug("Config loaded from Google Sheets")
     return _cache
+
+
+def _value_matches_default(key: str, value: Any) -> bool:
+    """Return True when *value* has the type ``DEFAULT_CONFIG[key]`` has.
+
+    Numbers are interchangeable (int/float) except that ``bool`` is
+    never a valid number here. Dicts/lists must match exactly; a
+    string default only accepts a string.
+    """
+    default = DEFAULT_CONFIG[key]
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, dict):
+        return isinstance(value, dict)
+    if isinstance(default, list):
+        return isinstance(value, list)
+    if isinstance(default, str):
+        return isinstance(value, str)
+    return True
 
 
 def _save_full_config(cfg: dict[str, Any]) -> None:

@@ -98,7 +98,7 @@ def run_stage(
     raise RuntimeError(f"Stage '{context.stage}' failed after {max_retries} attempts.")
 
 
-def run_pipeline(topic: str, pillar: str = "finance_to_technical") -> PipelineResult:
+def run_pipeline(topic: str, pillar: str = "ai_everything") -> PipelineResult:
     """Run full TubePilot AI automated pipeline for topic and return structured result."""
     t_start = time.perf_counter()
     logger.info(f"Initiating autonomous pipeline for '{topic}' [{pillar}]")
@@ -135,5 +135,5 @@ def run_pipeline(topic: str, pillar: str = "finance_to_technical") -> PipelineRe
 
 
 if __name__ == "__main__":
-    res = run_pipeline("How Revolut Makes Money", "finance_to_technical")
+    res = run_pipeline("How LLMs Are Trained", "ai_everything")
     print(res.model_dump_json(indent=2))

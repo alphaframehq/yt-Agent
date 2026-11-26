@@ -71,7 +71,11 @@ def notify_pipeline_success(
     buttons = [
         {"text": "🚀 Publish Public", "callback_data": f"pub_{video_id}"},
         {"text": "🗑️ Reject & Delete", "callback_data": f"rej_{video_id}"},
-        {"text": "✏️ Re-Edit Script", "callback_data": f"edit_{video_id}"},
+        # NOTE: the edit button uses the `edt_` prefix, NOT `edit_` —
+        # `edit_` has no handler in telegram_bot/bot.py and fell through
+        # to a fake "Action processed." reply. `edt_` hits the honest
+        # "not implemented" handler; no edit workflow exists yet.
+        {"text": "✏️ Re-Edit Script", "callback_data": f"edt_{video_id}"},
         {"text": "🔄 Re-Render", "callback_data": f"render_{video_id}"},
         {"text": "📱 Post Shorts", "callback_data": f"shorts_{video_id}"},
     ]

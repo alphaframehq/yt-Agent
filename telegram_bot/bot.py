@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from loguru import logger
@@ -61,7 +62,7 @@ from telegram_bot.dispatch import dispatch_pipeline_run
 from telegram_bot.health import get_cost_summary, get_pipeline_logs, get_system_ping
 from telegram_bot.keys import handle_keys_command
 from tools.secrets import _get_secret_optional, get_secret
-from tools.youtube_api import publish_public
+from tools.youtube_api import delete_video, publish_public
 
 __all__ = [
     "handle_command",
@@ -581,9 +582,18 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
     elif callback_data.startswith("pub_"):
         yt_id = callback_data[4:]
         ok = publish_public(yt_id)
-        if ok:
-            return {"text": f"🎉 *VIDEO PUBLISHED PUBLIC!*\n\nYouTube ID: `{yt_id}`\nURL: https://youtu.be/{yt_id}"}
-        return {"text": f"❌ Could not publish video `{yt_id}`. Please check YouTube API status."}
+        if not ok:
+            return {"text": f"❌ Could not publish video `{yt_id}`. Please check YouTube API status."}
+        # Publish succeeded on YouTube — record it in Sheets, or the
+        # yt_videos row stays pending_approval forever (the old bug:
+        # publish never updated Sheets).
+        try:
+            recorded = update_video_status(yt_id, "public", published_at=int(time.time()))
+        except Exception as e:
+            return {"text": f"⚠️ Video `{yt_id}` is PUBLIC on YouTube, but the Sheets status update failed ({e}).\n\nURL: https://youtu.be/{yt_id}\nFix the yt_videos row manually."}
+        if not recorded:
+            return {"text": f"⚠️ Video `{yt_id}` is PUBLIC on YouTube, but no yt_videos row was found to mark public.\n\nURL: https://youtu.be/{yt_id}"}
+        return {"text": f"🎉 *VIDEO PUBLISHED PUBLIC!*\n\nYouTube ID: `{yt_id}`\nURL: https://youtu.be/{yt_id}\nStatus recorded as public in yt_videos."}
 
     elif callback_data.startswith("rej_"):
         # P0 #21: reject only after the real DB update succeeds.
@@ -600,7 +610,19 @@ def handle_callback_query(callback_data: str) -> Dict[str, Any]:
             return {"text": f"❌ Could not reject video `{yt_id}`: `{e}` — no action taken."}
         if not ok:
             return {"text": f"❌ Could not reject video `{yt_id}`: status update failed — no action taken."}
-        return {"text": f"❌ Video `{yt_id}` marked rejected in yt_videos.\n\n_Note: this only updates the DB record; it does not delete the video from YouTube._"}
+        # The button promises "Reject & Delete": actually delete the
+        # private video from YouTube (old bug: only the Sheets row was
+        # marked — the video stayed on YouTube forever). The row is
+        # already marked rejected, so a delete failure is reported
+        # honestly instead of raising; the video stays PRIVATE, never
+        # public, so the failure mode is safe.
+        try:
+            deleted = delete_video(yt_id)
+        except Exception as e:
+            return {"text": f"⚠️ Video `{yt_id}` marked rejected in yt_videos, but the YouTube delete failed ({e}).\n\nThe video is still PRIVATE on YouTube — delete it manually in YouTube Studio."}
+        if not deleted:
+            return {"text": f"⚠️ Video `{yt_id}` marked rejected in yt_videos, but the YouTube delete failed.\n\nThe video is still PRIVATE on YouTube — delete it manually in YouTube Studio."}
+        return {"text": f"🗑️ Video `{yt_id}` rejected and deleted from YouTube.\n\nStatus recorded as rejected in yt_videos."}
 
     elif callback_data.startswith("reg_"):
         # P0 #21: re-enqueue only after the real enqueue succeeds.

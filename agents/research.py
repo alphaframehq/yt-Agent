@@ -60,8 +60,8 @@ REAL_DATA_CONFIDENCE = 0.9
 class ResearchInput(BaseModel):
     """Input payload for Research Agent."""
     topic: str = Field(..., description="Topic or company thesis to research")
-    pillar: Literal["finance_to_technical", "tech_to_financial"] = Field(
-        default="finance_to_technical",
+    pillar: Literal["ai_everything", "finance_to_technical", "tech_to_financial"] = Field(
+        default="ai_everything",
         description="Editorial angle"
     )
     ticker: Optional[str] = Field(default=None, description="Optional public ticker symbol")
@@ -91,6 +91,16 @@ class ResearchAgent:
             inp = ResearchInput(**input_data)
         else:
             inp = input_data
+
+        # 26 Nov 2026 niche correction: ai_everything topics are AI
+        # news/tools/discoveries/scams/predictions, not public
+        # companies — there is no ticker, no yfinance financials and
+        # no SEC filing for them. They are researched from real
+        # retrieved articles + YouTube landscape instead (see
+        # _run_ai_topic). The finance pillars keep the strict
+        # ticker/financials path below unchanged.
+        if inp.pillar == "ai_everything":
+            return self._run_ai_topic(inp)
 
         logger.info(f"Starting research on '{inp.topic}' under pillar '{inp.pillar}'")
 
@@ -300,6 +310,92 @@ class ResearchAgent:
         logger.info(f"ResearchBundle created with {len(bundle.sources)} sources from real retrieved documents.")
         return bundle
 
+    def _run_ai_topic(self, inp: ResearchInput) -> ResearchBundle:
+        """Research an ``ai_everything`` topic (no company, no ticker).
+
+        Sources are ONLY real retrieved documents: TinyFish articles
+        (raises when none are retrieved) and YouTube landscape
+        insights (raises on zero results). There are no financials
+        for an AI news/tool/discovery topic, so ``financials`` and
+        ``market_data`` are explicit 0.0 "not applicable" sentinels
+        (same sentinel convention as ``market_data`` in the finance
+        path) — never invented numbers, and downstream must treat 0
+        as missing, never render it as a real figure.
+        """
+        logger.info(f"Starting AI-niche research on '{inp.topic}'")
+
+        # Raises if no articles are retrieved — no fabricated context.
+        tinyfish_articles = search_fintech_context(inp.topic)
+        # Raises on no service / API error / zero results.
+        yt_insights = research_topic(inp.topic)
+
+        sources: List[SourceInfo] = []
+        for i, article in enumerate(tinyfish_articles):
+            sources.append(
+                SourceInfo(
+                    claim_id=f"context_{i}",
+                    claim=article.get("title", ""),
+                    source=article.get("source", "TinyFish"),
+                    url=article.get("url", ""),
+                    snippet=article.get("snippet", ""),
+                    confidence=REAL_DATA_CONFIDENCE,
+                )
+            )
+
+        technical_context = "\n".join(
+            f"[{a.get('source', 'TinyFish')}] {a.get('title', '')}: {a.get('snippet', '')}"
+            for a in tinyfish_articles
+        )
+
+        logger.warning(
+            "AI-niche topic: no company financials apply; financials "
+            "and market_data are 0.0 'not applicable' sentinels. "
+            "Downstream must never render them as real figures."
+        )
+        financials = FinancialData(
+            revenue_by_year={},
+            segments={},
+            margins=MarginData(gross=0.0, operating=0.0, net=0.0),
+            growth_rate=0.0,
+            unit_economics={},
+        )
+        market_data = MarketData(tam_usd=0.0, penetration_pct=0.0)
+
+        research_confidence = 0.0
+        if tinyfish_articles:
+            research_confidence += 0.7
+        if yt_insights.get("top_titles") or yt_insights.get("gaps"):
+            research_confidence += 0.1
+
+        bundle = ResearchBundle(
+            topic=inp.topic,
+            pillar=inp.pillar,
+            entities=[
+                EntityInfo(
+                    name=inp.topic,
+                    type="Topic",
+                    facts=[],
+                ),
+            ],
+            financials=financials,
+            technical_context=technical_context,
+            competitors=[],
+            market_data=market_data,
+            sources=sources,
+            yt_insights=YTInsights(
+                top_titles=yt_insights.get("top_titles", []),
+                common_tags=yt_insights.get("common_tags", []),
+                gaps=yt_insights.get("gaps", []),
+            ),
+            research_confidence=round(research_confidence, 2),
+        )
+
+        logger.info(
+            f"AI ResearchBundle created with {len(bundle.sources)} sources "
+            "from real retrieved documents."
+        )
+        return bundle
+
     def _infer_ticker(self, topic: str) -> Optional[str]:
         # PRODUCTION PATCH (P0 #5): only public companies map to a ticker.
         # Private companies (Stripe, Revolut) have NO public ticker — mapping
@@ -322,5 +418,5 @@ class ResearchAgent:
         return None
 
 
-def run_research(topic: str, pillar: str = "finance_to_technical") -> ResearchBundle:
+def run_research(topic: str, pillar: str = "ai_everything") -> ResearchBundle:
     return ResearchAgent().run(ResearchInput(topic=topic, pillar=pillar))

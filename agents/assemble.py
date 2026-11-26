@@ -7,12 +7,14 @@
 # explicit ALLOW_DEMO_MODE env flag is set (default off), and even then
 # writes a distinctly named *.DEMO-PLACEHOLDER.mp4 file, never the real
 # destination name.
-# NOTE (P1, unimplemented claims — not invented here): the module docstring
-# promises burned-in subtitles, Ken Burns zoom and chart fade-in, but the
-# original code implements none of them: the SRT file is generated but
-# never burned into the video (no subtitles filter is applied in
-# write_videofile), ImageClip is used with no Ken Burns zoom, and chart
-# PNGs get no fade-in. Do not claim those features until implemented.
+# MOTION PASS (Phase 2, 26 Nov 2026): the P1 gaps noted below are now
+# implemented — Ken Burns zoom/pan on stills (_ken_burns_clip), chart
+# fade-in (CHART_FADEIN_SEC), dip transitions between scenes
+# (TRANSITION_SEC), and burned-in subtitles via a second FFmpeg pass
+# (_burn_subtitles, best-effort with a loud warning on failure).
+# "Motion" here means zooms/pans/transitions/animated charts only —
+# there is no real-motion presenter video in this pipeline (AI video
+# generation is region-blocked for this account); never claim otherwise.
 """Video Assembly Engine for TubePilot AI.
 
 Combines:
@@ -23,16 +25,23 @@ Combines:
 - Burned-in subtitles (SRT via faster-whisper / FFmpeg subtitles filter)
 - Supports both 16:9 Longform (1920x1080) and 9:16 Shorts (1080x1920)
 
-P1 CAVEAT (2026-11-25 patch note): burned-in subtitles, Ken Burns zoom
-and chart fade-in are claimed above but NOT implemented in this file —
-the SRT is generated but never burned in, ImageClip has no zoom applied,
-and charts have no fade-in. See _render_composition().
+Motion (implemented 26 Nov 2026, Phase 2): every still image gets a
+deterministic Ken Burns zoom/pan (no static image sits still), chart
+scenes fade in over 0.8s, scenes are joined with dip-to-black
+transitions, and the generated SRT is burned in with FFmpeg's
+``subtitles`` filter in a second pass. If the subtitle burn fails
+(missing filter/font/ffmpeg), the render is still delivered WITHOUT
+burned subtitles and a clear warning is logged — the failure is never
+silent, and ``VideoAssembler.subtitles_burned`` reports the truth.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from loguru import logger
@@ -46,6 +55,7 @@ __all__ = [
     "VideoAssembler",
     "assemble_video",
     "assemble_shorts",
+    "_ken_burns_clip",
 ]
 
 OUTPUT_DIR = Path("cache/renders")
@@ -55,6 +65,22 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # placeholder was a ~40-byte ftyp atom; anything near that size is not
 # a real render.
 MIN_RENDER_BYTES = 1024
+
+# --- Motion constants (Phase 2, 26 Nov 2026) -------------------------------
+# Ken Burns: slow zoom between 1.0x and this factor over the scene.
+KEN_BURNS_MAX_ZOOM = 1.12
+# Dip-to-black transitions: fade out/in this long at each scene edge,
+# capped at 25% of the scene duration (see _transition_sec).
+TRANSITION_SEC = 0.5
+# Chart PNG overlays fade in over this long at the scene start.
+CHART_FADEIN_SEC = 0.8
+# Subtitle style burned in by FFmpeg (libass). DejaVu Sans ships with
+# most ffmpeg installs; if the filter/font is missing the burn is
+# skipped with a warning (see _burn_subtitles), never a crash.
+SUBTITLE_STYLE = (
+    "FontName=DejaVu Sans,FontSize=22,PrimaryColour=&HFFFFFF&,"
+    "OutlineColour=&H000000&,BorderStyle=1,Outline=2,Alignment=2,MarginV=40"
+)
 
 
 def _demo_mode_enabled() -> bool:
@@ -70,6 +96,140 @@ def _demo_mode_enabled() -> bool:
     }
 
 
+def _transition_sec(duration: float) -> float:
+    """Dip-transition length for a scene: 0.5s, capped at 25% of the
+    scene so a very short scene never gets a transition longer than
+    itself (MoviePy errors on fadein/fadeout > duration)."""
+    return min(TRANSITION_SEC, max(0.1, duration * 0.25))
+
+
+def _ken_burns_clip(
+    image_path: str,
+    duration: float,
+    width: int = 1920,
+    height: int = 1080,
+    variant: int = 0,
+) -> Any:
+    """Still image with a deterministic Ken Burns zoom/pan.
+
+    No extra API calls, no randomness: ``variant`` (the scene index)
+    picks one of four deterministic moves — zoom-in, zoom-out,
+    pan-left, pan-right — so the same script always renders the same
+    motion. Implemented as a time-varying MoviePy ``resize`` wrapped
+    in a fixed-size ``CompositeVideoClip`` (the composite crops the
+    oversized frame to the canvas), with a time-varying position for
+    the pan. Every still therefore moves for its whole duration; no
+    static image sits longer than a scene.
+    """
+    from moviepy.editor import CompositeVideoClip, ImageClip
+
+    zoom = KEN_BURNS_MAX_ZOOM
+    if variant % 2 == 0:  # zoom in: 1.0x -> 1.12x
+        def _scale(t: float) -> float:
+            return 1.0 + (zoom - 1.0) * (t / duration)
+    else:  # zoom out: 1.12x -> 1.0x
+        def _scale(t: float) -> float:
+            return zoom - (zoom - 1.0) * (t / duration)
+
+    zoomed = ImageClip(image_path).set_duration(duration).resize(_scale)
+    pan_forward = (variant // 2) % 2 == 0
+
+    def _pos(t: float) -> tuple:
+        s = _scale(t)
+        span_x = width - width * s  # <= 0: how far the frame may travel
+        span_y = height - height * s
+        p = t / duration
+        x = span_x * p if pan_forward else span_x * (1 - p)
+        return (x, span_y / 2)
+
+    moving = zoomed.set_position(_pos)
+    return CompositeVideoClip([moving], size=(width, height)).set_duration(duration)
+
+
+def _escape_subtitles_path(path: str) -> str:
+    """Escape a file path for FFmpeg's ``subtitles`` filter value.
+
+    The filter parses ``:`` and ``'`` specially, so backslashes,
+    colons and single quotes are escaped. (Windows drive-letter
+    colons are the classic failure this guards against.)
+    """
+    return (
+        path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    )
+
+
+def _burn_subtitles(video_path: Path, srt_path: Path) -> bool:
+    """Burn the SRT at *srt_path* into *video_path* (second FFmpeg pass).
+
+    Renders to a temp file in the same directory and atomically
+    replaces the original only on success. Returns True when
+    subtitles were actually burned. Returns False (and logs a clear
+    warning) when ffmpeg is missing, the ``subtitles`` filter is
+    unavailable, or the filter run fails — the caller then delivers
+    the render WITHOUT burned subtitles and must say so (see
+    ``VideoAssembler.subtitles_burned``). Never raises for a burn
+    failure: a missing subtitle burn must not lose a good render.
+    """
+    if not srt_path.exists():
+        logger.warning(
+            f"Subtitle burn skipped: SRT file missing ({srt_path}). "
+            "Delivering render WITHOUT burned-in subtitles."
+        )
+        return False
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        logger.warning(
+            "Subtitle burn skipped: ffmpeg not found on PATH. "
+            "Delivering render WITHOUT burned-in subtitles."
+        )
+        return False
+
+    filter_arg = (
+        f"subtitles='{_escape_subtitles_path(str(srt_path.resolve()))}'"
+        f":force_style='{SUBTITLE_STYLE}'"
+    )
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=str(video_path.parent), prefix=video_path.stem + ".subs.", suffix=".mp4"
+    )
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg, "-y",
+                "-i", str(video_path),
+                "-vf", filter_arg,
+                "-c:a", "copy",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning(
+            f"Subtitle burn failed to run ({e}). Delivering render "
+            "WITHOUT burned-in subtitles."
+        )
+        tmp_path.unlink(missing_ok=True)
+        return False
+    if result.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size < MIN_RENDER_BYTES:
+        logger.warning(
+            "Subtitle burn FAILED (ffmpeg subtitles filter error; "
+            f"stderr: {(result.stderr or '').strip()[-500:] or 'n/a'}). "
+            "Delivering render WITHOUT burned-in subtitles — check "
+            "that ffmpeg was built with libass and a usable font."
+        )
+        tmp_path.unlink(missing_ok=True)
+        return False
+    os.replace(tmp_path, video_path)
+    logger.info(f"Burned-in subtitles applied to {video_path}")
+    return True
+
+
 class VideoAssembler:
     """Multi-track video and audio compositor."""
 
@@ -77,6 +237,10 @@ class VideoAssembler:
         self.is_shorts = is_shorts
         self.resolution = (1080, 1920) if is_shorts else (1920, 1080)
         self.fps = 30
+        # True only when the last render actually burned subtitles in.
+        # Read this after assemble() — never assume subtitles are
+        # burned just because an SRT file was generated.
+        self.subtitles_burned = False
 
     def assemble(
         self,
@@ -86,9 +250,11 @@ class VideoAssembler:
     ) -> str:
         """Compose all scenes, attach audio, background music, burned subtitles, and render MP4.
 
-        NOTE: "burned subtitles" in this docstring is aspirational — the
-        SRT file is generated (step 4) but is NOT burned into the rendered
-        video by _render_composition() (no subtitles filter is applied).
+        Motion applied per scene: Ken Burns zoom/pan on stills, 0.8s
+        fade-in on chart scenes, dip-to-black transitions between
+        scenes. Subtitles are burned in a second FFmpeg pass when
+        possible; if the burn fails, the render is still returned but
+        ``self.subtitles_burned`` stays False and a warning is logged.
 
         bundle_data: a ResearchBundle, or a chart-data dict as built by
         research_bundle_to_chart_data(). Chart scenes REQUIRE it — if it
@@ -155,11 +321,18 @@ class VideoAssembler:
     ) -> str:
         """Execute MoviePy / FFmpeg rendering pipeline.
 
-        Raises on any MoviePy/FFmpeg failure. P1 note: burned-in
-        subtitles are NOT applied here (the SRT at *srt_path* is only
-        generated, never passed to a subtitles filter), ImageClips get
-        NO Ken Burns zoom, and chart overlays get NO fade-in — those
-        features are unimplemented and must not be claimed as present.
+        Raises on any MoviePy/FFmpeg failure. Motion (Phase 2):
+        still images get a deterministic Ken Burns zoom/pan
+        (variant = scene index), chart scenes fade in over
+        CHART_FADEIN_SEC, and every scene gets a dip-to-black
+        transition (fadein/fadeout) so cuts are never hard. Dip
+        transitions are used instead of overlapping crossfades
+        deliberately: they keep total duration — and therefore the
+        SRT timings generated in step 4 — exact. After the render,
+        the SRT is burned in via a second FFmpeg pass
+        (:func:`_burn_subtitles`); if that burn fails, the render is
+        still delivered but ``self.subtitles_burned`` stays False and
+        a warning is logged — never a silent claim of subtitles.
         Background music, if missing, is silently omitted (pre-existing
         behaviour, kept unchanged by this patch).
         """
@@ -170,20 +343,32 @@ class VideoAssembler:
             from moviepy.editor import (
                 AudioFileClip,
                 CompositeAudioClip,
-                ImageClip,
                 VideoFileClip,
                 concatenate_videoclips,
             )
 
+            width, height = self.resolution
             clips = []
-            for a_info, v_info in zip(audio_assets, visual_assets):
+            for idx, (a_info, v_info) in enumerate(zip(audio_assets, visual_assets)):
                 dur = a_info["duration_sec"]
                 v_path = v_info["asset_path"]
+                is_chart = v_info.get("visual_type") == "chart"
 
                 if v_info["media_type"] == "video" and Path(v_path).exists():
                     clip = VideoFileClip(v_path).subclip(0, min(dur, 10)).set_duration(dur)
                 else:
-                    clip = ImageClip(v_path).set_duration(dur)
+                    # Still image: Ken Burns zoom/pan (deterministic
+                    # variant per scene) so it never sits static.
+                    clip = _ken_burns_clip(v_path, dur, width, height, variant=idx)
+
+                # Fade-in: chart scenes fade in over CHART_FADEIN_SEC
+                # (the chart overlay fade-in); other scenes fade in over
+                # the dip-transition length. A single fadein call only —
+                # stacking two fadeins corrupts the mask. Fade-out is
+                # always the dip-transition length.
+                t_sec = _transition_sec(dur)
+                fade_in = max(CHART_FADEIN_SEC, t_sec) if is_chart else t_sec
+                clip = clip.fadein(fade_in).fadeout(t_sec)
 
                 # Attach scene voiceover audio
                 audio_clip = AudioFileClip(a_info["audio_path"])
@@ -212,6 +397,17 @@ class VideoAssembler:
                 raise RuntimeError(
                     f"Render produced no usable video at {dest_path} "
                     f"(missing or < {MIN_RENDER_BYTES} bytes)."
+                )
+
+            # Burn in subtitles (second FFmpeg pass). Best-effort: a
+            # failed burn keeps the good render, sets the flag False,
+            # and logs a warning — never a silent claim.
+            self.subtitles_burned = _burn_subtitles(dest_path, srt_path)
+            if not self.subtitles_burned:
+                logger.warning(
+                    f"Render {dest_path} delivered WITHOUT burned-in "
+                    "subtitles (burn failed or unavailable). The SRT "
+                    f"file still exists at {srt_path} for manual use."
                 )
             return str(dest_path.resolve())
 

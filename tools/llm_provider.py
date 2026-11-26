@@ -39,8 +39,29 @@ T = TypeVar("T", bound=BaseModel)
 __all__ = [
     "LLMProvider",
     "LLMResponse",
+    "SafetyBlockedError",
     "call_with_fallback",
 ]
+
+
+class SafetyBlockedError(ValueError):
+    """Raised when Gemini refuses a prompt on safety grounds.
+
+    Distinct from a transient/network error on purpose: a safety
+    refusal must NEVER be retried, re-prompted, or routed around to
+    the next provider in the fallback chain (that would just burn the
+    chain trying to get a looser model to answer a blocked prompt).
+    Callers treat it as "this topic is unproduceable": mark the topic
+    failed/skipped and move on to the next queued topic.
+
+    26 Nov 2026: Gemini returns HTTP 200 with an empty ``candidates``
+    list (or a candidate whose ``finishReason`` is ``SAFETY``) and
+    ``promptFeedback.blockReason`` set, e.g. ``SAFETY``. The old code
+    returned that as a successful empty response (``content=""``),
+    which then failed JSON parsing 3x in ``call_structured`` before
+    the fallback chain burned the remaining providers on the same
+    blocked prompt.
+    """
 
 
 class LLMResponse(BaseModel):
@@ -182,12 +203,42 @@ class LLMProvider:
                     resp.raise_for_status()
                     data = resp.json()
 
-                    text = ""
+                    # -- Safety refusal (26 Nov 2026 fix) ----------------
+                    # Gemini answers a blocked prompt with HTTP 200 and
+                    # no usable candidate: promptFeedback.blockReason
+                    # (e.g. "SAFETY") and/or finishReason "SAFETY".
+                    # That is a final refusal, not an empty success.
+                    feedback = data.get("promptFeedback") or {}
+                    block_reason = feedback.get("blockReason")
                     candidates = data.get("candidates", [])
+                    finish_reason = ""
+                    if candidates:
+                        finish_reason = str(
+                            candidates[0].get("finishReason") or ""
+                        )
+                    if block_reason or finish_reason == "SAFETY":
+                        raise SafetyBlockedError(
+                            "Gemini safety refusal "
+                            f"(blockReason={block_reason or '-'}, "
+                            f"finishReason={finish_reason or '-'}, "
+                            f"model={self.model}): the prompt was blocked "
+                            "and no content was generated. Do not retry "
+                            "or fall back to another provider for this topic."
+                        )
+
+                    text = ""
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
                             text = parts[0].get("text", "")
+                    if not text:
+                        # No block reason, but also no content: fail
+                        # loudly instead of returning an empty "success"
+                        # that only dies later in JSON parsing.
+                        raise ValueError(
+                            f"Gemini returned an empty response (no text "
+                            f"in candidates, model={self.model})."
+                        )
 
                     return LLMResponse(
                         content=text,
@@ -322,6 +373,12 @@ def call_with_fallback(
                 )
             else:
                 return provider.call(system_prompt, user_prompt)
+        except SafetyBlockedError:
+            # A safety refusal is final for this prompt: do NOT try
+            # the next provider (that only burns the chain asking a
+            # looser model to answer a blocked prompt). Propagate so
+            # the caller can mark the topic failed and move on.
+            raise
         except Exception as e:
             logger.warning(f"Provider {provider_name}/{model_name} failed: {e}. Trying next in chain...")
             last_error = e
