@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-11-26T19:55:27.451129+00:00",
+  "generated_at_utc": "2026-11-26T20:45:22.195703+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
@@ -15,7 +15,7 @@
       "rows": []
     },
     "yt_pipeline_runs": {
-      "count": 9,
+      "count": 10,
       "rows": [
         {
           "run_id": "run_850f5966",
@@ -149,6 +149,22 @@
           "run_id": "run_cc7d3c7f",
           "started_at": "1795722800",
           "ttl": "1803498800",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "failed",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
+        },
+        {
+          "run_id": "run_33010e60",
+          "started_at": "1795723347",
+          "ttl": "1803499347",
           "extra_json": {
             "kind": "daily_run",
             "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
@@ -706,7 +722,7 @@
     },
     "pending_requests": 0,
     "requests_total": 0,
-    "pipeline_runs_total": 9,
+    "pipeline_runs_total": 10,
     "config_keys": [],
     "active_models": null
   }
