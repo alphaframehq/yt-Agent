@@ -8,7 +8,9 @@
 # Applied via PR #1 (branch fix/production-mocks), 2026-11-25. No secrets in this file — env-var placeholders only.
 """Unified LLM Provider abstraction for TubePilot AI.
 
-Supports Bedrock (Claude), Gemini (2.0/2.5 Flash), and OpenRouter (:free).
+Supports Bedrock (Claude), Gemini (3.8 Flash / 3.5 Flash-Lite /
+2.5 Flash-Lite — free tier, verified 26 Nov 2026 against Google's
+pricing page), and OpenRouter (:free).
 Provides automatic retries with exponential backoff (tenacity), structured output
 validation (Pydantic), schema error re-prompting, and multi-provider fallback chains.
 """
@@ -16,6 +18,9 @@ validation (Pydantic), schema error re-prompting, and multi-provider fallback ch
 from __future__ import annotations
 
 import json
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Type, TypeVar
 import httpx
 from loguru import logger
@@ -42,7 +47,33 @@ __all__ = [
     "SafetyBlockedError",
     "GeminiOverloadedError",
     "call_with_fallback",
+    "FREE_TIER_TEXT_MODELS",
+    "FREE_TIER_TTS_MODELS",
+    "RETRY_AFTER_MAX_WAIT_SEC",
 ]
+
+
+# Free-tier Gemini text/TTS model IDs, verified 26 Nov 2026 against
+# Google's own pricing page (https://ai.google.dev/gemini-api/docs/pricing,
+# crawled 2026-11-26 19:45 UTC): each of these lists "Free of charge"
+# for input AND output on the free tier. The 503 overloads in runs
+# #17/#18 were free-tier capacity overload on the most-used free model
+# (gemini-3.8-flash), NOT wrong IDs — the IDs below are current.
+# Image models (e.g. imagen-3.0-generate-001) are paid-only and 404 on
+# the free key; image generation goes through the Pixabay fallback
+# chain in agents/visuals.py instead (commit 99b7e29).
+FREE_TIER_TEXT_MODELS: tuple[str, ...] = (
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-lite",
+)
+FREE_TIER_TTS_MODELS: tuple[str, ...] = (
+    "gemini-2.5-flash-preview-tts",
+)
+
+# Longest we ever honor a server-sent Retry-After before giving up
+# on this Gemini model for the call (one bounded second chance).
+RETRY_AFTER_MAX_WAIT_SEC = 60.0
 
 
 class SafetyBlockedError(ValueError):
@@ -67,7 +98,7 @@ class SafetyBlockedError(ValueError):
 
 class GeminiOverloadedError(RuntimeError):
     """Raised when every Gemini key in the pool fails with a 5xx
-    server error (503 overload, 500/502/504).
+    server error (503 overload, 500/502/504) or a 429 rate-limit.
 
     Deliberately a RuntimeError, NOT an httpx error: ``LLMProvider.call``
     retries httpx errors 3x with tenacity, which would burn minutes
@@ -75,7 +106,55 @@ class GeminiOverloadedError(RuntimeError):
     Raising this instead moves the fallback chain to the next provider
     promptly (run #17: Gemini 503s stalled the chain while OpenRouter
     was never tried in time).
+
+    The one exception is a server-sent ``Retry-After``: ``_call_gemini``
+    honors it ONCE (capped at ``RETRY_AFTER_MAX_WAIT_SEC``) and re-runs
+    the key pass a final time before raising this — a single bounded
+    wait on the server's own guidance, not tenacity's blind 3x retry.
     """
+
+
+def _parse_retry_after(resp: Any) -> float:
+    """Seconds to wait from a response's ``Retry-After`` header.
+
+    Accepts a delay in seconds (``"30"``) or an HTTP-date. Returns 0
+    when the header is absent, unparsable, or in the past. Capped at
+    ``RETRY_AFTER_MAX_WAIT_SEC`` — Google's overload waits are
+    normally seconds, and a run must never stall for minutes on one
+    header. Defensive about mock/non-httpx responses: only real
+    str/int/float header values are accepted (a MagicMock header
+    returns 0, never a sleep).
+    """
+    try:
+        headers = getattr(resp, "headers", None) or {}
+        raw = headers.get("Retry-After") if hasattr(headers, "get") else None
+    except Exception:
+        return 0.0
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        wait = float(raw)
+    elif isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return 0.0
+        try:
+            wait = float(raw)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(raw)
+            except (TypeError, ValueError):
+                return 0.0
+            if when is None:
+                return 0.0
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            wait = (when - datetime.now(timezone.utc)).total_seconds()
+    else:
+        return 0.0
+    if wait <= 0:
+        return 0.0
+    return min(wait, RETRY_AFTER_MAX_WAIT_SEC)
 
 
 class LLMResponse(BaseModel):
@@ -203,7 +282,16 @@ class LLMProvider:
         schema: Optional[Type[T]] = None,
         temperature: float = 0.2,
     ) -> LLMResponse:
-        """Call Google Gemini API with automatic key pool failover on rate-limits (429) or quota errors."""
+        """Call Google Gemini API with automatic key pool failover on rate-limits (429) or quota errors.
+
+        Free-tier reality (runs #17/#18): the 503s are capacity
+        overload on the most-used free model, not wrong IDs — so an
+        overloaded model gets ONE bounded second chance: if the
+        server sent a Retry-After, we sleep it (capped at 60s) and
+        re-run the key pass once. After that, 429/5xx failures raise
+        GeminiOverloadedError (no tenacity retry) so the fallback
+        chain moves to the next model promptly.
+        """
         keys = get_gemini_pool_keys()
         if not keys:
             # PRODUCTION PATCH (P0 #1): raise instead of returning a mock "{}".
@@ -224,19 +312,78 @@ class LLMProvider:
         if schema is not None:
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
+        outcome = self._gemini_key_pass(keys, headers, payload)
+        if outcome["response"] is not None:
+            return outcome["response"]
+
+        # One bounded second chance on the server's own guidance.
+        retry_after = outcome["retry_after_sec"]
+        if retry_after > 0 and (
+            outcome["server_error_statuses"] or outcome["rate_limited_statuses"]
+        ):
+            logger.warning(
+                f"Gemini overloaded/rate-limited (model={self.model}); "
+                f"server asked to wait {retry_after:.0f}s — sleeping once, "
+                "then retrying the key pass a final time."
+            )
+            time.sleep(retry_after)
+            second = self._gemini_key_pass(keys, headers, payload)
+            if second["response"] is not None:
+                return second["response"]
+            outcome["server_error_statuses"].extend(second["server_error_statuses"])
+            outcome["rate_limited_statuses"].extend(second["rate_limited_statuses"])
+            outcome["last_err"] = second["last_err"]
+
+        if outcome["last_err"] is not None:
+            if outcome["server_error_statuses"] or outcome["rate_limited_statuses"]:
+                # The backend is overloaded/rate-limited, not the
+                # request — skip tenacity's retry (it would only
+                # re-run the same failing keys) and let the fallback
+                # chain move to the next provider promptly.
+                statuses = (
+                    outcome["server_error_statuses"]
+                    + outcome["rate_limited_statuses"]
+                )
+                raise GeminiOverloadedError(
+                    f"Gemini overloaded/rate-limited: all {len(keys)} key(s) "
+                    f"failed with statuses {statuses} (model={self.model})."
+                )
+            raise outcome["last_err"]
+        raise RuntimeError("All Gemini API keys in pool failed.")
+
+    def _gemini_key_pass(
+        self,
+        keys: List[str],
+        headers: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """One pass over the key pool; returns an outcome dict.
+
+        Keys: ``response`` (LLMResponse on success, else None),
+        ``last_err`` (last exception, else None),
+        ``server_error_statuses`` (5xx seen), ``rate_limited_statuses``
+        (429s seen), ``retry_after_sec`` (largest Retry-After seen on
+        a 429/5xx this pass, 0 when the server sent none).
+        """
         last_err: Optional[Exception] = None
         server_error_statuses: list[int] = []
+        rate_limited_statuses: list[int] = []
+        retry_after_sec = 0.0
         for idx, api_key in enumerate(keys):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={api_key}"
             try:
                 with httpx.Client(timeout=60.0) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     if resp.status_code == 429:
+                        retry_after_sec = max(
+                            retry_after_sec, _parse_retry_after(resp)
+                        )
                         logger.warning(
                             f"Gemini key [{mask_secret(api_key)}] hit 429 Rate Limit. "
                             f"Failing over to next key in pool ({idx + 1}/{len(keys)})..."
                         )
                         mark_gemini_key_failed(api_key, error_status=429, cooldown_sec=60.0)
+                        rate_limited_statuses.append(429)
                         last_err = httpx.HTTPStatusError("429 Rate Limit", request=resp.request, response=resp)
                         continue
                     elif resp.status_code in (401, 403):
@@ -253,6 +400,9 @@ class LLMProvider:
                         # key immediately and record it, so the
                         # post-loop check can skip tenacity's retry
                         # entirely when every key is 5xx.
+                        retry_after_sec = max(
+                            retry_after_sec, _parse_retry_after(resp)
+                        )
                         logger.warning(
                             f"Gemini key [{mask_secret(api_key)}] hit HTTP "
                             f"{resp.status_code} (server error/overload). "
@@ -305,11 +455,17 @@ class LLMProvider:
                             f"in candidates, model={self.model})."
                         )
 
-                    return LLMResponse(
-                        content=text,
-                        provider="gemini",
-                        model=self.model,
-                    )
+                    return {
+                        "response": LLMResponse(
+                            content=text,
+                            provider="gemini",
+                            model=self.model,
+                        ),
+                        "last_err": None,
+                        "server_error_statuses": server_error_statuses,
+                        "rate_limited_statuses": rate_limited_statuses,
+                        "retry_after_sec": retry_after_sec,
+                    }
             except (httpx.HTTPStatusError, httpx.RequestError) as exc:
                 logger.warning(f"Gemini request failed using key [{mask_secret(api_key)}]: {exc}")
                 resp_obj = getattr(exc, 'response', None)
@@ -317,22 +473,24 @@ class LLMProvider:
                 mark_gemini_key_failed(api_key, error_status=status if isinstance(status, int) else 500)
                 if isinstance(status, int) and status >= 500:
                     server_error_statuses.append(status)
+                    retry_after_sec = max(
+                        retry_after_sec, _parse_retry_after(resp_obj)
+                    )
+                elif status == 429:
+                    rate_limited_statuses.append(429)
+                    retry_after_sec = max(
+                        retry_after_sec, _parse_retry_after(resp_obj)
+                    )
                 last_err = exc
                 continue
 
-        if last_err is not None:
-            if server_error_statuses and len(server_error_statuses) >= len(keys):
-                # Every key failed with a 5xx: the backend is down,
-                # not the request — skip tenacity's retry (it would
-                # only re-run the same failing keys) and let the
-                # fallback chain move to the next provider promptly.
-                raise GeminiOverloadedError(
-                    f"Gemini overloaded: all {len(keys)} key(s) failed "
-                    f"with server errors {server_error_statuses} "
-                    f"(model={self.model})."
-                )
-            raise last_err
-        raise RuntimeError("All Gemini API keys in pool failed.")
+        return {
+            "response": None,
+            "last_err": last_err,
+            "server_error_statuses": server_error_statuses,
+            "rate_limited_statuses": rate_limited_statuses,
+            "retry_after_sec": retry_after_sec,
+        }
 
 
     def _call_bedrock(

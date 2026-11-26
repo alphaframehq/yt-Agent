@@ -11,16 +11,12 @@
 # terms, or supply AWS keys); Polly stays as an optional fallback
 # when AWS keys exist — see agents/tts.py.
 #
-# TO-VERIFY-LIVE: the exact model id / endpoint below
+# VERIFIED-LIVE 26 Nov 2026 (run #18): the model id / endpoint below
 # ("gemini-2.5-flash-preview-tts", POST
 # .../v1beta/models/{model}:generateContent with generationConfig
 # responseModalities ["AUDIO"] + speechConfig prebuiltVoiceConfig)
-# is the documented Gemini TTS API as of Nov 2026, but it has NEVER
-# been called live from this repo — no video has ever been produced.
-# The first live Codespace run must confirm the model id, the
-# response shape (inlineData base64 PCM), and the free-tier quota
-# before a daily run depends on it. See
-# ~/workspace/yt-agent-live-upload-checklist.md.
+# synthesized all 8 scenes (183s) live, and Google's pricing page
+# lists the model "Free of charge" on the free tier.
 #
 # Fail-loud contract (mirrors tools/polly.py): missing GEMINI_KEY,
 # any non-2xx response, an empty/blocked response, empty audio, or
@@ -78,8 +74,13 @@ __all__ = [
     "DEFAULT_VOICE",
 ]
 
-# TO-VERIFY-LIVE (see module header): documented Gemini TTS model id
-# as of Nov 2026; never yet called live from this repo.
+# VERIFIED 26 Nov 2026: documented Gemini TTS model id
+# ("gemini-2.5-flash-preview-tts") — Google's pricing page
+# (ai.google.dev/gemini-api/docs/pricing, crawled 2026-11-26 19:45 UTC)
+# lists it "Free of charge" for input AND output on the free tier,
+# and run #18 synthesized all 8 scenes (183s) with it live.
+# Do NOT switch to gemini-2.5-pro-preview-tts: that one is paid-only
+# ("Not available" on the free tier).
 DEFAULT_MODEL = "gemini-2.5-flash-preview-tts"
 DEFAULT_VOICE = "Kore"
 # TO-VERIFY-LIVE: documented endpoint shape (generateContent on the
