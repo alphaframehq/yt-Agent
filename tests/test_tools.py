@@ -101,11 +101,66 @@ class TestPhase2Tools(unittest.TestCase):
         res = search_company_filings("AAPL")
         self.assertEqual(res["ticker"], "AAPL")
 
-    def test_tinyfish_raises_without_key(self):
-        """Without a TinyFish key, search must raise instead of returning
-        fabricated articles with fake URLs."""
-        with self.assertRaises(Exception):
-            search_fintech_context("Stripe interchange fees")
+    def test_tinyfish_missing_key_falls_back_to_real_rss_not_fabricated(self):
+        """Without a TinyFish key, search must fall back to REAL RSS
+        articles (26 Nov 2026, run #14) — never fabricated articles
+        with fake URLs. The old contract (raise without a key) died
+        with the old TinySearch host: a missing/dead TinySearch must
+        no longer hard-fail the whole daily run."""
+        from unittest.mock import patch
+
+        from tools.trends import TrendItem, TrendReport
+
+        with (
+            patch("tools.tinyfish.get_secret", return_value=None),
+            patch(
+                "tools.trends.fetch_trends",
+                return_value=TrendReport(
+                    topic="Stripe interchange fees",
+                    pillar="ai_everything",
+                    angles=[],
+                    items=[
+                        TrendItem(
+                            title="Stripe Cuts Interchange Fees",
+                            source="google_news",
+                            url="https://example.com/news/stripe-fees",
+                            snippet="Stripe lowers fees for small businesses.",
+                            published_at=1764000000,
+                        )
+                    ],
+                    sources=["google_news"],
+                    errors=[],
+                ),
+            ),
+        ):
+            articles = search_fintech_context("Stripe interchange fees")
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0]["url"], "https://example.com/news/stripe-fees")
+        self.assertNotIn("alphapilot.io", articles[0]["url"])
+        self.assertNotIn("fintechinsights.io", articles[0]["url"])
+
+    def test_tinyfish_raises_when_both_sources_dead(self):
+        """Missing key AND empty RSS -> loud failure, never invented."""
+        from unittest.mock import patch
+
+        from tools.trends import TrendReport
+
+        with (
+            patch("tools.tinyfish.get_secret", return_value=None),
+            patch(
+                "tools.trends.fetch_trends",
+                return_value=TrendReport(
+                    topic="Stripe interchange fees",
+                    pillar="ai_everything",
+                    angles=[],
+                    items=[],
+                    sources=[],
+                    errors=["google_news: boom"],
+                ),
+            ),
+        ):
+            with self.assertRaises(Exception):
+                search_fintech_context("Stripe interchange fees")
 
     def test_youtube_api_topic_research_raises_without_service(self):
         """Without YouTube credentials, research_topic must raise instead

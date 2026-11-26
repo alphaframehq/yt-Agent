@@ -127,6 +127,11 @@ JSON_COLUMNS: Dict[str, set] = {
     "yt_bot_requests": {"inputs_json"},
     "yt_config": {"value_json"},
     "yt_insights": {"top_titles_json", "common_tags_json", "gaps_json"},
+    # 26 Nov 2026 (run #14): yt_pipeline_runs was missing here, so
+    # record_pipeline_run() wrote the raw extra dict into the
+    # extra_json cell and the Sheets API rejected the row with
+    # "Invalid values" on EVERY run — telemetry never recorded.
+    "yt_pipeline_runs": {"extra_json"},
     "yt_trends": {"angles_json", "sources_json"},
     "yt_shorts": {"extra_json"},
 }

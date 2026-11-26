@@ -1,5 +1,5 @@
 # PRODUCTION PATCH (local only, 2026-11-25) — yt-Agent audit P0 #3.
-# search_fintech_context() now RAISES on missing TINYFISH_API_KEY, API error,
+# search_fintech_context() RAISED on missing TINYFISH_API_KEY, API error,
 # non-200 response, or zero articles — instead of returning fabricated
 # articles with fake URLs (alphapilot.io/research/..., fintechinsights.io),
 # fake sources and fake 2024-Q3/Q4 dates. The fabricated fallback and the
@@ -7,6 +7,12 @@
 # cached. Stale cache entries holding fabricated articles are dropped.
 # get_topic_summary() is unchanged in structure — it now propagates the raise
 # instead of citing fabricated articles.
+# UPDATE (26 Nov 2026, run #14): the TinySearch host moved —
+# api.tinyfish.io is NXDOMAIN, the live endpoint is
+# api.search.tinyfish.ai (GET, X-API-Key). A dead TinySearch no longer
+# hard-fails the run: search_fintech_context() falls back to real
+# keyless RSS articles (tools/trends.py) and raises only when BOTH
+# sources yield nothing. The no-fabrication rule is unchanged.
 # Source: alphaframehq/yt-Agent @ c39f42541b8e784dcf41c09583dc57227be07667.
 # Applied via PR #1 (branch fix/production-mocks), 2026-11-25. No secrets in this file — env-var placeholder only.
 """TinyFish and web intelligence tool for TubePilot AI.
@@ -19,11 +25,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 import httpx
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from tools.secrets import get_secret
 
@@ -54,13 +66,163 @@ def _is_fabricated_article(article: Dict[str, Any]) -> bool:
     return any(fragment in url for fragment in _FABRICATED_ARTICLE_URL_FRAGMENTS)
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=5))
-def search_fintech_context(topic: str, max_results: int = 5) -> List[Dict[str, Any]]:
-    """Fetch recent news, blog posts, and technical writeups on a fintech topic.
+# TinySearch host move (verified 26 Nov 2026 — run #14 root cause):
+# the old https://api.tinyfish.io/v1/search is DEAD. Public DNS
+# (8.8.8.8, 1.1.1.1) returns NO records for api.tinyfish.io, so the
+# GitHub Actions runner failed with gaierror EAI_NONAME ("No address
+# associated with hostname"). The vendor moved Search to
+# https://api.search.tinyfish.ai (GET, X-API-Key header) — see
+# https://docs.tinyfish.ai/search-api (crawled 26 Nov 2026) and the
+# official tinyfish PyPI SDK. The old host is gone, not flaky: do not
+# "retry harder" against it.
+# Fallback (26 Nov 2026): TinySearch is a single point of failure for
+# the research node. When it is unreachable / errors / returns zero
+# articles (or the key is missing), research falls back to the
+# already-working keyless RSS feeds (tools/trends.py — Google News RSS,
+# Hacker News, Techmeme, Bing News), which return REAL articles with
+# real titles/URLs. The fallback never fabricates: if RSS also yields
+# nothing, search_fintech_context raises and the run fails loudly —
+# correctly — instead of scripting from invented facts.
+TINYSEARCH_BASE_URL = "https://api.search.tinyfish.ai"
 
-    Raises ValueError if TINYFISH_API_KEY is missing, and RuntimeError on API
-    error, non-200 response, or zero articles returned. Never fabricates
-    articles. Only real API results are cached.
+# RSS source labels for fallback articles (feed ids in tools/trends.py).
+_RSS_SOURCE_LABELS = {
+    "google_news": "Google News",
+    "google_trends_daily": "Google Trends",
+    "hacker_news": "Hacker News",
+    "techmeme": "TechMeme",
+    "bing_news": "Bing News",
+}
+
+
+def _epoch_to_iso(epoch: int) -> str:
+    """RSS pubDate epoch -> ISO-8601 UTC string ('' when undated)."""
+    if not epoch:
+        return ""
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return ""
+
+
+def _tinysearch_get(
+    api_key: str, topic: str, max_results: int, domain_type: str
+) -> List[Dict[str, Any]]:
+    """One TinySearch GET. Returns [] on zero results; raises on
+    transport / HTTP / malformed-response failure."""
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(
+                TINYSEARCH_BASE_URL,
+                headers={"X-API-Key": api_key},
+                params={"q": topic, "domain_type": domain_type, "language": "en"},
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"TinySearch returned HTTP {resp.status_code} "
+                    f"(domain_type={domain_type}) for topic '{topic}'"
+                )
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"TinySearch returned non-JSON response for topic '{topic}': {exc}"
+                ) from exc
+    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+        logger.error(f"TinySearch query failed: {e}")
+        raise RuntimeError(f"TinySearch query failed for topic '{topic}': {e}") from e
+
+    results = []
+    for item in data.get("results", []) or []:
+        if not isinstance(item, dict):
+            continue
+        results.append(
+            {
+                "title": item.get("title", "") or "",
+                "snippet": item.get("snippet", "") or "",
+                "url": item.get("url", "") or "",
+                "source": item.get("publisher")
+                or item.get("site_name")
+                or "TinyFish",
+                "published_at": item.get("published_at")
+                or item.get("date")
+                or item.get("published")
+                or "",
+            }
+        )
+    return results[:max_results]
+
+
+@retry(
+    retry=retry_if_exception_type(RuntimeError),
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=1, min=2, max=5),
+    # Re-raise the original RuntimeError (not tenacity.RetryError) so
+    # the caller in search_fintech_context() can catch it and fall back.
+    reraise=True,
+)
+def _tinysearch_query(topic: str, max_results: int) -> List[Dict[str, Any]]:
+    """TinySearch primary path: news articles first, then general web.
+
+    Raises ValueError if TINYFISH_API_KEY is missing (not retried) and
+    RuntimeError on transport/HTTP failure or zero articles from both
+    domain types (retried once by tenacity).
+    """
+    api_key = get_secret("TINYFISH_API_KEY")
+    if not api_key:
+        raise ValueError("TINYFISH_API_KEY is required for TinySearch")
+
+    for domain_type in ("news", "web"):
+        articles = _tinysearch_get(api_key, topic, max_results, domain_type)
+        if articles:
+            return articles
+    raise RuntimeError(
+        f"TinySearch returned zero articles for topic '{topic}' (news + web)"
+    )
+
+
+def _search_rss_fallback(
+    topic: str, max_results: int, opener: Any = None
+) -> List[Dict[str, Any]]:
+    """Keyless RSS fallback (tools/trends.py): real articles from the
+    working public feeds. Never raises; [] means "no real articles"."""
+    from tools.trends import fetch_trends
+
+    report = fetch_trends(topic=topic, pillar="ai_everything", opener=opener)
+    articles = []
+    for item in report.items[:max_results]:
+        articles.append(
+            {
+                "title": item.title,
+                "snippet": item.snippet,
+                "url": item.url,
+                "source": _RSS_SOURCE_LABELS.get(item.source, item.source),
+                "published_at": _epoch_to_iso(item.published_at),
+            }
+        )
+    return articles
+
+
+def search_fintech_context(
+    topic: str, max_results: int = 5, _opener: Any = None
+) -> List[Dict[str, Any]]:
+    """Fetch recent news, blog posts, and technical writeups on a topic.
+
+    Primary: TinySearch (GET https://api.search.tinyfish.ai,
+    X-API-Key). If it is unreachable, errors, returns zero articles,
+    or the API key is missing, research falls back automatically to
+    real keyless RSS articles (Google News / Hacker News / TechMeme /
+    Bing News via tools/trends.py). Raises RuntimeError only when
+    BOTH sources yield nothing — the run then fails loudly instead
+    of scripting from invented facts.
+
+    Only real TinySearch results are cached; RSS fallback results are
+    re-fetched every run (cheap, keyless) so a recovered TinySearch
+    is picked up again instead of serving a stale cached fallback.
+    Never fabricates articles.
+
+    ``_opener`` is test-only: an injectable URL opener passed through
+    to the RSS fallback's ``fetch_trends``.
     """
     cache_file = _get_cache_path(f"search:{topic}")
 
@@ -78,41 +240,29 @@ def search_fintech_context(topic: str, max_results: int = 5) -> List[Dict[str, A
         except Exception:
             pass
 
-    api_key = get_secret("TINYFISH_API_KEY")
-    if not api_key:
-        # PRODUCTION PATCH (P0 #3): missing key must fail loudly, not fall
-        # through to fabricated articles.
-        raise ValueError("TINYFISH_API_KEY is required for TinyFish search")
-
-    url = f"https://api.tinyfish.io/v1/search"
-    headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(url, headers=headers, json={"query": topic, "limit": max_results})
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"TinyFish API returned HTTP {resp.status_code} for topic '{topic}'"
-                )
-            data = resp.json()
-            results = []
-            for item in data.get("articles", []):
-                results.append({
-                    "title": item.get("title", ""),
-                    "snippet": item.get("summary", ""),
-                    "url": item.get("url", ""),
-                    "source": item.get("publisher", "TinyFish News"),
-                    "published_at": item.get("published_at", ""),
-                })
-    except (httpx.HTTPStatusError, httpx.RequestError) as e:
-        logger.error(f"TinyFish API query failed: {e}")
-        raise RuntimeError(f"TinyFish API query failed for topic '{topic}': {e}") from e
+        results = _tinysearch_query(topic, max_results)
+        cache_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        return results
+    except (ValueError, RuntimeError) as exc:
+        # PRODUCTION PATCH (P0 #3) intent preserved — a dead TinySearch
+        # must fail LOUDLY, never fall through to fabricated articles.
+        # The loud failure is now the RSS fallback + this warning, not
+        # a dead run: the fallback returns only real retrieved RSS
+        # articles. If RSS also yields nothing, we raise below.
+        logger.warning(
+            f"TinySearch unavailable for topic '{topic}' ({exc}); "
+            "falling back to keyless RSS research."
+        )
+        results = _search_rss_fallback(topic, max_results, opener=_opener)
 
     if not results:
-        # PRODUCTION PATCH (P0 #3): zero real articles is a failure, not a
-        # cue to invent articles.
-        raise RuntimeError(f"TinyFish returned zero articles for topic '{topic}'")
-
-    cache_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        # Zero real articles from BOTH sources is a failure, not a cue
+        # to invent articles.
+        raise RuntimeError(
+            f"No research articles retrieved for topic '{topic}': "
+            "TinySearch and the RSS fallback both returned nothing."
+        )
     return results
 
 
