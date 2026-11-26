@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-11-26T13:00:21.582090+00:00",
+  "generated_at_utc": "2026-11-26T15:29:26.101538+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
@@ -23,48 +23,511 @@
       "rows": []
     },
     "yt_bot_requests": {
-      "count": 2,
-      "rows": [
-        {
-          "request_id": "req_820fd487",
-          "type": "run_pipeline",
-          "inputs_json": {
-            "topic": "best poses for sex",
-            "pillar": "finance_to_technical",
-            "topic_id": "top_a63e07a2"
-          },
-          "status": "pending",
-          "requested_at": "1795603733",
-          "ttl": "1796208533"
-        },
-        {
-          "request_id": "req_e1db5d9e",
-          "type": "run_pipeline",
-          "inputs_json": {
-            "topic": "best poses for sex",
-            "pillar": "finance_to_technical",
-            "topic_id": "top_a63e07a2"
-          },
-          "status": "pending",
-          "requested_at": "1795604551",
-          "ttl": "1796209351"
-        }
-      ]
+      "count": 0,
+      "rows": []
     },
     "yt_topics_queue": {
-      "count": 1,
+      "count": 61,
       "rows": [
         {
-          "topic_id": "top_a63e07a2",
-          "topic": "best poses for sex",
-          "pillar": "finance_to_technical",
+          "topic_id": "top_093c6fb1",
+          "topic": "GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
+          "pillar": "ai_everything",
           "status": "pending",
           "priority": "10",
-          "added_at": "1795604550"
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_cfd1bc38",
+          "topic": "Gemini 4 Full Lineup: Carbon, Hydrogen, Neon — Kaunsa Best Hai?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "10",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_5bbb4d2b",
+          "topic": "Claude Fable 5.2: Anthropic Ka Naya King Model",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_a35bfc28",
+          "topic": "Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_ac59f8c8",
+          "topic": "Qwen4-Max, GLM-5.4 aur Sarvam-105B: China-India AI Ka Jawab",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_954eedaf",
+          "topic": "Sora Is Dead: OpenAI Ne Apna Video AI Band Kyu Kar Diya?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_ecbf2078",
+          "topic": "ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_e95cd211",
+          "topic": "EU AI Act 2 December 2026 Deadline: AI Content Labelling Rule",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_d6049a5b",
+          "topic": "Bonsai 2.5: 27B AI Model Sirf 5.9 GB Me — Laptop Par Full AI",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_d20f1355",
+          "topic": "GPT-6 Ne Protein Design Aur Exoplanet Khoj Nikale — AI Scientist Ban Gaya",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_df2a0faf",
+          "topic": "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak — Simple Hindi Me",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_f63c1587",
+          "topic": "Scaling Laws Explained: Chinchilla Formula — Bigger Model Always Better?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_499d6948",
+          "topic": "Transformer Architecture: 'Attention Is All You Need' — Aasan Hindi Me",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_71af79cd",
+          "topic": "Tokens Kya Hote Hain? AI Aapko Per-Token Charge Kyu Karta Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_9644c1ed",
+          "topic": "Temperature, Top-P, Top-K: AI Ki Randomness Control Karne Ka Formula",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_4682bb87",
+          "topic": "RAG Explained: AI Aapke Documents Se Jawab Kaise Deta Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_5800ed4a",
+          "topic": "Fine-Tuning vs Prompting vs RAG: Kab Kya Use Karein?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_7ef9f00e",
+          "topic": "Quantization Q4/Q8: 27B Model 6 GB Me Kaise Chal Jaata Hai?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_adbc6d5a",
+          "topic": "RLHF Aur RL Post-Training: AI Reward Se Kaise Seekhta Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_171f32c4",
+          "topic": "Embeddings Aur Vector Database: AI Search Kaise Kaam Karta Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_db230205",
+          "topic": "Context Window 1M Tokens: Kya Hai, Kitna Kaam Ka, Kitna Mehenga?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_98e08b51",
+          "topic": "Diffusion Models: AI Images Aur Videos Kaise Banata Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_50926fe6",
+          "topic": "MoE Architecture: 2.8 Trillion Params, Sirf 95B Active — Kaise?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_c8358fa8",
+          "topic": "AI Agents Kaise Kaam Karte Hain? Tools, Memory, Planning Loop",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_dda9d6eb",
+          "topic": "Prompt Engineering Formula: 7-Part Framework Jo Har Baar Kaam Kare",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_ee18727e",
+          "topic": "Hallucination Kyu Hoti Hai? AI Jhooth Kyu Bolta Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_7fd265e4",
+          "topic": "LLM Benchmarks Kaise Padhein? Kaunse Scores Fake Hote Hain",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_a4eec27a",
+          "topic": "Local AI Setup: Ollama Aur LM Studio Se Apna AI Ghar Par Chalao",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_50f3e35f",
+          "topic": "AI Memory: ChatGPT Aapko Kaise Yaad Rakhta Hai? Privacy Ka Sach",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_0d872c85",
+          "topic": "Neural Networks From Zero: Perceptron Se Deep Learning Tak",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "6",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_3272b874",
+          "topic": "Kya AI Aapki Job Le Lega? 2026 Layoffs Ka Asli Data",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "10",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_1af99f31",
+          "topic": "AI Bubble Hai Ya Real Revolution? Dono Side Ka Sach",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_9c8b73d3",
+          "topic": "Kya AI Kabhi Conscious Ho Sakta Hai? Science Kya Kehti Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_5bc0e66e",
+          "topic": "Free AI vs Paid AI: ₹2000/Month Dena Worth Hai Ya Nahi?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_ed2839b4",
+          "topic": "Kya Bachcho Ko AI Se Padhana Chahiye? Parents Ke Liye Guide",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_eeb5be6e",
+          "topic": "AI Se Paise Kaise Kamaye 2026: 5 Real Tareeke (No Scam)",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_7dabb7c7",
+          "topic": "Kya AI Art Real Art Hai? Artists vs AI Debate",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_c5b87bdb",
+          "topic": "AI Par Kitna Trust Karein? Medical Aur Legal Advice Ka Khatra",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_8627a59b",
+          "topic": "AI Girlfriend/Boyfriend Apps: Sahi Ya Galat? Emotional AI Ka Sach",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_98fa8871",
+          "topic": "Kya India AI Race Me Peeche Hai Ya Aage? Sarvam, Compute Aur Talent",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_926c832b",
+          "topic": "AI Se Exam Aur Homework Karna Cheating Hai Ya Smart Work?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_81247cce",
+          "topic": "Aapka Favourite AI Tool Kaunsa Hai? Top 10 Tools Ka Countdown",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "6",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_5fcc4a1b",
+          "topic": "Kya AI Ko Regulate Karna Chahiye Ya Free Chhodna Chahiye?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_e1e46ac2",
+          "topic": "AI Voice Cloning: Apni Awaaz Clone Karni Chahiye? Danger Kya Hai",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_64e2cdd8",
+          "topic": "2027 Me AI Kaisa Hoga? Meri Prediction + Aapki Prediction",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_dc677a51",
+          "topic": "Myth vs Reality: Kya AI Sab Kuch Jaanta Hai?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_ea4c1345",
+          "topic": "AI vs Human Coder: Kaun Jeetega? Live Challenge",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_fa4f415a",
+          "topic": "GPT-6.2 vs Gemini 4 vs Claude Fable: Ultimate AI Showdown 2026",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "10",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_d75fa392",
+          "topic": "Kya AI Duniya Par Kabzha Kar Lega? Top Conspiracy Theories Decoded",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_68e4e80c",
+          "topic": "AI Leak: GPT-7 Aur Gemini 5 Rumours — Kya Sach Hai?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_087e788d",
+          "topic": "Deepfake Scam: Elon Musk Tesla Flying Car $4.7M Fraud Ka Sach",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "10",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_d7c80ead",
+          "topic": "Aadhaar Deepfake Fraud: AI Se Identity Theft Kaise Hua Ahmedabad Me",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "9",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_2233e4df",
+          "topic": "AI Ne Navier-Stokes Aur Riemann Proof Me Madad Ki? Math Ka Naya Yug",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_11bda425",
+          "topic": "Kya AI Robots 2027 Me Ghar Aa Jayenge? Humanoid Robot Race",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_b9c7af8b",
+          "topic": "OpenRouter Warning: MiniMax Prompts Padhe Gaye? Aapka Data Safe Hai?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_efb7760e",
+          "topic": "AI Ne 11 Minute Me Hospital Server Hack Kiya — AWS Cairn Story",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_e9b84a77",
+          "topic": "Claude Code vs Codex vs Gemini CLI: Coding Agent War 2026",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_ba41eb27",
+          "topic": "AI Video War: Veo 3.1 vs Kling 3.0 vs Runway Gen-4.5 — Kaun Best Hai?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_fdec9c60",
+          "topic": "Kya AI Models Ek Dusre Se Seekh Kar Smart Ho Rahe Hain? AI Training AI",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "7",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_07c39c4e",
+          "topic": "The $750 Billion AI Gamble: Hyperscalers Ka Paisa Kab Wapas Aayega?",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "8",
+          "added_at": "1795697836"
+        },
+        {
+          "topic_id": "top_7cad3a11",
+          "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "11",
+          "added_at": "1795701894"
         }
       ]
     },
     "yt_insights": {
+      "count": 0,
+      "rows": []
+    },
+    "yt_trends": {
+      "count": 0,
+      "rows": []
+    },
+    "yt_shorts": {
       "count": 0,
       "rows": []
     }
@@ -72,12 +535,12 @@
   "summary": {
     "videos_total": 0,
     "videos_by_status": {},
-    "queue_total": 1,
+    "queue_total": 61,
     "queue_by_status": {
-      "pending": 1
+      "pending": 61
     },
-    "pending_requests": 2,
-    "requests_total": 2,
+    "pending_requests": 0,
+    "requests_total": 0,
     "pipeline_runs_total": 0,
     "config_keys": [],
     "active_models": null
