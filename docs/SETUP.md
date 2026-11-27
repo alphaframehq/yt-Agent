@@ -105,7 +105,7 @@ end-to-end test is still REQUIRED before enabling the daily cron
 run observed failing loudly. See `docs/GAPS.md` #1. No video was
 uploaded by PR #4 itself.
 
-## 2. LLM — Gemini (free, primary) + OpenRouter (fallback). NO Bedrock.
+## 2. LLM — Gemini (free, primary) + Bluesminds (paid fallback) + OpenRouter (fallback). NO Bedrock.
 
 1. **Gemini AI Studio** (https://aistudio.google.com): create an API key
    (free tier). This is the primary LLM for research, script and verify.
@@ -115,7 +115,18 @@ uploaded by PR #4 itself.
    The patched `tools/llm_provider.py` raises if no Gemini key is set —
    it no longer returns `"{}"` and no longer blocks the OpenRouter
    fallback.
-2. **OpenRouter** (https://openrouter.ai): create a key. Fallback when
+2. **Bluesminds** (https://api.bluesminds.com/v1, OpenAI-compatible):
+   paid fallback AFTER the Gemini pool is exhausted and BEFORE
+   OpenRouter — Gemini stays primary because it is free, so the $100
+   balance (27 Nov 2026) is spent only when the free tier is down.
+   Set `BLUESMINDS_API_KEY` as a GitHub repo secret and export it in
+   `.github/workflows/daily.yml` (same pattern as `GEMINI_KEY_2`).
+   Default model `moonshotai/kimi-k3`, override with `BLUESMINDS_MODEL`.
+   TEXT ONLY (research/script/verify) — Bluesminds has no TTS model
+   (Kokoro stays the TTS fallback) and image generation is out of
+   scope. Client: `tools/bluesminds.py`; chain entry in
+   `config_manager.py` `DEFAULT_CONFIG["verify_chain"]`.
+3. **OpenRouter** (https://openrouter.ai): create a key. Fallback when
    Gemini fails / rate-limits. `OPENROUTER_KEY`.
 3. **Bedrock: do not provision.** The old README required Bedrock, the
    old `.env.example` said "Bedrock skipped", and config used Gemini.
@@ -298,6 +309,7 @@ guide.
 | `YT_REFRESH_TOKEN` | OAuth consent flow, 25 Nov 2026 (Cloud Shell `~/tubepilot-token.json`) | YouTube OAuth2 — **expires ~2 Dec 2026 in Testing mode** |
 | `GEMINI_KEY` | Gemini AI Studio | LLM primary |
 | `GEMINI_KEY_POOL` | Gemini AI Studio (comma/JSON list) | LLM pool failover (optional) |
+| `BLUESMINDS_API_KEY` | Bluesminds (api.bluesminds.com) | LLM paid fallback after Gemini (text only) |
 | `OPENROUTER_KEY` | OpenRouter | LLM fallback |
 | `AGNES_API_KEY` | Agnes AI, key named `mus` | Agnes image + video |
 | `AGNES_BASE_URL` | `https://apihub.agnes-ai.com/v1` | Agnes image + video |
