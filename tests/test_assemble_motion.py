@@ -1,12 +1,13 @@
-"""Motion tests (Phase 2, 26 Nov 2026): Ken Burns, chart fade-in,
-scene transitions, burned-in subtitles, AI chart data, hook check.
+"""Motion tests (Phase 2, 26 Nov 2026; Phase 3, 28 Nov 2026): Ken Burns,
+chart draw-in, cross-dissolve transitions, subtitle opt-in, AI chart
+data, hook check.
 
 MoviePy is NOT installed in this environment (and must never be
 required for a deterministic test), so a fake ``moviepy.editor``
 module is injected into ``sys.modules`` before each test that renders.
 The fake records every clip call, so tests assert on the motion that
-was actually applied — resize-with-time (Ken Burns), fadein/fadeout
-(dip transitions + chart fade-in) — not on a status string. Real
+was actually applied — resize-with-time (Ken Burns), fadein/crossfadein
+(transitions + chart fade-in) — not on a status string. Real
 matplotlib IS used for the chart-rendering tests (it is installed).
 """
 
@@ -80,6 +81,14 @@ class _FakeClip:
         self.calls.append(("fadeout", t))
         return self
 
+    def crossfadein(self, t):
+        self.calls.append(("crossfadein", t))
+        return self
+
+    def crossfadeout(self, t):
+        self.calls.append(("crossfadeout", t))
+        return self
+
     def set_audio(self, a):
         self.calls.append(("set_audio", a))
         self.audio = a
@@ -117,15 +126,11 @@ class _FakeAudioClip(_FakeClip):
 
 
 class _FakeCompositeClip(_FakeClip):
-    pass
-
-
-def _fake_concatenate(clips, method="compose"):
-    final = _FakeClip()
-    final.calls.append(("concatenate", len(clips), method))
-    final.audio = _FakeAudioClip()
-    final.duration = sum(c.duration or 0 for c in clips)
-    return final
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Real CompositeVideoClip carries .size from its size kwarg;
+        # the renderer's final-size check reads it.
+        self.size = kwargs.get("size")
 
 
 def _install_fake_moviepy():
@@ -135,7 +140,6 @@ def _install_fake_moviepy():
     editor.AudioFileClip = _FakeAudioClip
     editor.CompositeVideoClip = _FakeCompositeClip
     editor.CompositeAudioClip = _FakeAudioClip
-    editor.concatenate_videoclips = _fake_concatenate
     parent = types.ModuleType("moviepy")
     parent.editor = editor
     sys.modules["moviepy"] = parent
@@ -222,7 +226,7 @@ class TestKenBurns(unittest.TestCase):
         image_clip = next(c for c in _FakeClip.registry if isinstance(c, _FakeImageClip))
         (resize_fn,) = [c[1] for c in image_clip.calls if c[0] == "resize"]
         self.assertAlmostEqual(resize_fn(0.0), 1.0)
-        self.assertAlmostEqual(resize_fn(10.0), 1.12)
+        self.assertAlmostEqual(resize_fn(10.0), 1.30)
         # Composite crops to the canvas size.
         composite = next(c for c in _FakeClip.registry if isinstance(c, _FakeCompositeClip))
         self.assertEqual(composite.kwargs.get("size"), (1920, 1080))
@@ -241,8 +245,24 @@ class TestKenBurns(unittest.TestCase):
         _ken_burns_clip("/tmp/does-not-matter.png", 8.0, 1920, 1080, variant=1)
         image_clip = next(c for c in _FakeClip.registry if isinstance(c, _FakeImageClip))
         (resize_fn,) = [c[1] for c in image_clip.calls if c[0] == "resize"]
-        self.assertAlmostEqual(resize_fn(0.0), 1.12)
+        self.assertAlmostEqual(resize_fn(0.0), 1.30)
         self.assertAlmostEqual(resize_fn(8.0), 1.0)
+
+    def test_zoom_reverses_at_beats_inside_scene(self):
+        """Phase 3: the zoom runs to its extreme at 1/3, pulls back
+        at 2/3, then runs out again — a long scene transforms
+        mid-scene instead of drifting one way throughout."""
+        from agents.assemble import _ken_burns_clip
+
+        _ken_burns_clip("/tmp/a.png", 9.0, 1920, 1080, variant=0)
+        image_clip = next(c for c in _FakeClip.registry if isinstance(c, _FakeImageClip))
+        (resize_fn,) = [c[1] for c in image_clip.calls if c[0] == "resize"]
+        at_third = resize_fn(3.0)
+        at_two_thirds = resize_fn(6.0)
+        self.assertAlmostEqual(at_third, 1.30)
+        self.assertLess(at_two_thirds, at_third)
+        self.assertGreater(at_two_thirds, 1.0)
+        self.assertAlmostEqual(resize_fn(9.0), 1.30)
 
     def test_variants_are_deterministic(self):
         """Same variant + duration always yields the same scale curve."""
@@ -262,12 +282,14 @@ class TestKenBurns(unittest.TestCase):
         for t in (0.0, 3.0, 6.0):
             self.assertEqual(fn_a(t), fn_b(t))
 
-    def test_transition_sec_is_capped_for_short_scenes(self):
-        from agents.assemble import _transition_sec
+    def test_scene_start_accounts_for_crossfade_overlap(self):
+        """Phase 3: scene starts shift one CROSSFADE_SEC earlier per
+        earlier boundary (dip transitions are gone)."""
+        from agents.assemble import CROSSFADE_SEC, _scene_start
 
-        self.assertEqual(_transition_sec(10.0), 0.5)
-        self.assertEqual(_transition_sec(1.0), 0.25)
-        self.assertEqual(_transition_sec(0.2), 0.1)
+        self.assertEqual(_scene_start(0, [5.0, 5.0, 5.0]), 0.0)
+        self.assertAlmostEqual(_scene_start(1, [5.0, 5.0, 5.0]), 5.0 - CROSSFADE_SEC)
+        self.assertAlmostEqual(_scene_start(2, [5.0, 5.0, 5.0]), 10.0 - 2 * CROSSFADE_SEC)
 
     def test_cover_fill_landscape_photo_in_portrait_canvas(self):
         """Shorts quality fix F2: a 1280x720 still in a 1080x1920
@@ -283,7 +305,7 @@ class TestKenBurns(unittest.TestCase):
         image_clip = next(c for c in _FakeClip.registry if isinstance(c, _FakeImageClip))
         (resize_fn,) = [c[1] for c in image_clip.calls if c[0] == "resize"]
         self.assertAlmostEqual(resize_fn(0.0), 1920 / 720, places=4)
-        self.assertAlmostEqual(resize_fn(8.0), (1920 / 720) * 1.12, places=4)
+        self.assertAlmostEqual(resize_fn(8.0), (1920 / 720) * 1.30, places=4)
         composite = next(c for c in _FakeClip.registry if isinstance(c, _FakeCompositeClip))
         self.assertEqual(composite.kwargs.get("size"), (1080, 1920))
         (pos_fn,) = [c[1] for c in image_clip.calls if c[0] == "set_position"]
@@ -297,7 +319,7 @@ class TestKenBurns(unittest.TestCase):
         self.assertEqual(clip.duration, 8.0)
 
     def test_cover_disabled_keeps_old_curve_for_charts(self):
-        """Charts pass cover=False: the old 1.0->1.12 curve is kept
+        """Charts pass cover=False: the 1.0->1.30 curve is kept
         so 2:1 chart PNGs are not cropped."""
         from agents.assemble import _ken_burns_clip
 
@@ -305,7 +327,7 @@ class TestKenBurns(unittest.TestCase):
         image_clip = next(c for c in _FakeClip.registry if isinstance(c, _FakeImageClip))
         (resize_fn,) = [c[1] for c in image_clip.calls if c[0] == "resize"]
         self.assertAlmostEqual(resize_fn(0.0), 1.0)
-        self.assertAlmostEqual(resize_fn(8.0), 1.12)
+        self.assertAlmostEqual(resize_fn(8.0), 1.30)
 
 
 class TestRenderCompositionMotion(unittest.TestCase):
@@ -351,12 +373,15 @@ class TestRenderCompositionMotion(unittest.TestCase):
             self.assertTrue(_calls_of(clip, "resize"))
             fn = _calls_of(clip, "resize")[0][1]
             self.assertTrue(callable(fn))
-        # … and every scene clip got a dip transition (fadein + fadeout).
+        # … the first scene fades in from black and the second
+        # cross-dissolves in over the first (Phase 3: no dip, no
+        # fadeout anywhere). Composites: 2 Ken Burns + 1 final.
         composites = [c for c in _FakeClip.registry if isinstance(c, _FakeCompositeClip)]
-        self.assertEqual(len(composites), 2)
+        self.assertEqual(len(composites), 3)
+        self.assertTrue(_calls_of(composites[0], "fadein"))
+        self.assertTrue(_calls_of(composites[1], "crossfadein"))
         for clip in composites:
-            self.assertTrue(_calls_of(clip, "fadein"))
-            self.assertTrue(_calls_of(clip, "fadeout"))
+            self.assertFalse(_calls_of(clip, "fadeout"))
         # Subtitle burn was skipped (no ffmpeg in this test) and flagged.
         self.assertFalse(assembler.subtitles_burned)
 
@@ -368,7 +393,9 @@ class TestRenderCompositionMotion(unittest.TestCase):
         ]
         self._render(visuals, durations=(5.0,))
         composites = [c for c in _FakeClip.registry if isinstance(c, _FakeCompositeClip)]
-        self.assertEqual(len(composites), 1)
+        # Ken Burns composite + final composite; the chart scene is
+        # the first (only) scene, so it fades in over CHART_FADEIN_SEC.
+        self.assertEqual(len(composites), 2)
         fadeins = _calls_of(composites[0], "fadein")
         self.assertEqual(len(fadeins), 1)
         self.assertAlmostEqual(fadeins[0][1], CHART_FADEIN_SEC)
@@ -376,7 +403,7 @@ class TestRenderCompositionMotion(unittest.TestCase):
     def test_video_scenes_are_cover_cropped_to_canvas(self):
         """Shorts quality fix F2: a landscape stock clip is resized +
         center-cropped to exactly the canvas (no 2:3 output), and
-        still gets its dip transition."""
+        still gets its opening fade-in."""
         visuals = [
             {"asset_path": str(self.vid), "media_type": "video", "visual_type": "stock"},
         ]
@@ -392,7 +419,7 @@ class TestRenderCompositionMotion(unittest.TestCase):
         self.assertEqual(crops[0][1].get("width"), 1920)
         self.assertEqual(crops[0][1].get("height"), 1080)
         self.assertTrue(_calls_of(video_clips[0], "fadein"))
-        self.assertTrue(_calls_of(video_clips[0], "fadeout"))
+        self.assertFalse(_calls_of(video_clips[0], "fadeout"))
 
     def test_shorts_render_has_stat_cards_and_no_subtitle_burn(self):
         """Shorts quality fix (Dev, 27 Nov 2026): no narration
@@ -421,9 +448,9 @@ class TestRenderCompositionMotion(unittest.TestCase):
         self.assertEqual(out, str(self.dest.resolve()))
         self.assertFalse(assembler.subtitles_burned)
         # Per scene: Ken Burns composite + stat-card composite, plus
-        # one hook composite at the end.
+        # the final cross-dissolve composite and one hook composite.
         composites = [c for c in _FakeClip.registry if isinstance(c, _FakeCompositeClip)]
-        self.assertEqual(len(composites), 5)
+        self.assertEqual(len(composites), 6)
         # Stat cards and the hook are real ImageClips (Pillow PNGs).
         image_clips = [c for c in _FakeClip.registry if isinstance(c, _FakeImageClip)]
         self.assertEqual(len(image_clips), 5)
@@ -438,16 +465,20 @@ class TestRenderCompositionMotion(unittest.TestCase):
         ]
         assembler = VideoAssembler(is_shorts=False)
         audio = [{"duration_sec": 5.0, "audio_path": "/tmp/a.wav"}]
-        wrong_size = _FakeClip()
-        wrong_size.size = (1280, 1920)
-        wrong_size.duration = 5.0
-        # concatenate_videoclips is imported inside
-        # _render_composition from the (fake) moviepy.editor module,
-        # so patch it there.
+
+        class _WrongSizeComposite(_FakeCompositeClip):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.size = (1280, 1920)
+
+        # CompositeVideoClip is imported inside _render_composition
+        # from the (fake) moviepy.editor module, so patch it there;
+        # every composite (Ken Burns, final) gets the wrong size,
+        # but only the final one is size-checked.
         import moviepy.editor as _ed
 
         with mock.patch("agents.assemble.shutil.which", return_value=None), mock.patch.object(
-            _ed, "concatenate_videoclips", return_value=wrong_size
+            _ed, "CompositeVideoClip", _WrongSizeComposite
         ):
             with self.assertRaises(RuntimeError) as ctx:
                 assembler._render_composition(
