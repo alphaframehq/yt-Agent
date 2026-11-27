@@ -244,7 +244,7 @@ class TestImagen404Fallback(unittest.TestCase):
         both aspect ratios."""
         from tools.image_gen import generate_programmatic_visual
 
-        for ratio, size in (("16:9", (1280, 720)), ("9:16", (720, 1280))):
+        for ratio, size in (( "16:9", (1280, 720)), ("9:16", (1080, 1920))):
             dest = Path(f"cache/images/test_prog_{ratio.replace(':', 'x')}.png")
             try:
                 out = generate_programmatic_visual(
