@@ -10,7 +10,8 @@
 
 Supports Bedrock (Claude), Gemini (3.8 Flash / 3.5 Flash-Lite /
 2.5 Flash-Lite — free tier, verified 26 Nov 2026 against Google's
-pricing page), and OpenRouter (:free).
+pricing page), Bluesminds (paid fallback after Gemini, 27 Nov 2026),
+and OpenRouter (:free).
 Provides automatic retries with exponential backoff (tenacity), structured output
 validation (Pydantic), schema error re-prompting, and multi-provider fallback chains.
 """
@@ -32,6 +33,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from tools.bluesminds import call_bluesminds
 from tools.secrets import (
     _get_secret_optional,
     get_gemini_pool_keys,
@@ -218,6 +220,8 @@ class LLMProvider:
             return self._call_gemini(system_prompt, user_prompt, schema, temperature)
         elif self.provider == "bedrock":
             return self._call_bedrock(system_prompt, user_prompt, schema, temperature)
+        elif self.provider == "bluesminds":
+            return self._call_bluesminds(system_prompt, user_prompt, schema, temperature)
         elif self.provider == "openrouter":
             return self._call_openrouter(system_prompt, user_prompt, schema, temperature)
         else:
@@ -556,6 +560,37 @@ class LLMProvider:
             # This method already re-raised; it never returned a fallback.
             logger.warning(f"Bedrock invocation failed ({e}). Raising.")
             raise
+
+    def _call_bluesminds(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        schema: Optional[Type[T]] = None,
+        temperature: float = 0.2,
+    ) -> LLMResponse:
+        """Call the Bluesminds API (OpenAI-compatible chat completions).
+
+        Paid fallback after the Gemini pool is exhausted — Gemini
+        stays primary because it is free; Bluesminds ($100 balance,
+        27 Nov 2026) is spent only when the free tier is down. TEXT
+        ONLY: no TTS or image model is routed through here.
+        ``BLUESMINDS_MODEL`` env overrides the chain's model name
+        when set. Retries on 429/5xx live inside
+        ``tools.bluesminds.call_bluesminds`` (max 3 attempts); a
+        missing key raises ValueError so ``call_with_fallback``
+        moves on to OpenRouter instead of returning an empty success.
+        """
+        import os
+
+        model = os.environ.get("BLUESMINDS_MODEL") or self.model
+        text = call_bluesminds(
+            system_prompt, user_prompt, model=model, temperature=temperature
+        )
+        return LLMResponse(
+            content=text,
+            provider="bluesminds",
+            model=model,
+        )
 
     def _call_openrouter(
         self,
