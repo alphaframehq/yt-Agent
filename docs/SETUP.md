@@ -121,7 +121,9 @@ uploaded by PR #4 itself.
    balance (27 Nov 2026) is spent only when the free tier is down.
    Set `BLUESMINDS_API_KEY` as a GitHub repo secret and export it in
    `.github/workflows/daily.yml` (same pattern as `GEMINI_KEY_2`).
-   Default model `moonshotai/kimi-k3`, override with `BLUESMINDS_MODEL`.
+   Default model `nvidia/nemotron-3.5-lightning-30b-a3b` (live-verified
+   27 Nov 2026; `moonshotai/kimi-k3` returns HTTP 410 — retired),
+   override with `BLUESMINDS_MODEL`.
    TEXT ONLY (research/script/verify) — Bluesminds has no TTS model
    (Kokoro stays the TTS fallback) and image generation is out of
    scope. Client: `tools/bluesminds.py`; chain entry in
