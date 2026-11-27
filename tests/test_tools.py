@@ -10,6 +10,7 @@ returning fake success.
 
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -125,7 +126,9 @@ class TestPhase2Tools(unittest.TestCase):
                             source="google_news",
                             url="https://example.com/news/stripe-fees",
                             snippet="Stripe lowers fees for small businesses.",
-                            published_at=1764000000,
+                            # Fresh (relative to now) — the 7-day max-age
+                            # filter (27 Nov 2026) drops stale items.
+                            published_at=int(time.time()) - 3600,
                         )
                     ],
                     sources=["google_news"],
