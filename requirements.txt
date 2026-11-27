@@ -16,8 +16,19 @@ yfinance>=0.2.36
 beautifulsoup4>=4.12
 
 # Media
-moviepy>=1.0.3
-Pillow>=10.0
+# moviepy pinned to 1.0.3 (27 Nov 2026, run #21): agents/assemble.py and
+# agents/charts.py import `moviepy.editor` and use 1.x APIs (set_duration,
+# set_position, subclip, set_audio, volumex). moviepy 2.x removed
+# `moviepy.editor` and renamed those methods, so an unbounded >=1.0.3
+# resolves to 2.x in CI and render fails with "No module named
+# 'moviepy.editor'". Do NOT unpin without migrating the imports first.
+moviepy==1.0.3
+# Pillow pinned to 9.5.0 for the same reason: moviepy 1.0.3's resize uses
+# PIL.Image.ANTIALIAS, which Pillow removed in 10.0. With Pillow >=10 the
+# Ken Burns resize in _ken_burns_clip crashes with
+# "module 'PIL.Image' has no attribute 'ANTIALIAS'". Repo Pillow use is
+# basic (Image.new/ImageDraw/ImageFont) and needs nothing from >=10.
+Pillow==9.5.0
 matplotlib>=3.8
 faster-whisper>=1.0
 
