@@ -9,15 +9,22 @@ pipeline with a key that already exists in GitHub repo secrets.
 The user can overrule it later.
 
 Provider selection (env TTS_PROVIDER, default "gemini"):
-- "gemini" (default): Gemini TTS first. If it fails AND AWS Polly
-  keys exist, Polly is tried once as a fallback; if Polly also
-  fails (or no AWS keys exist) the ORIGINAL Gemini error is raised
-  — fail loud, never silent/stub audio, never a masked error.
+- "gemini" (default): Gemini TTS first. If it fails, Kokoro TTS
+  (local ONNX, tools/kokoro_tts.py, voice af_heart) is tried as the
+  fallback — no API key, no quota, so it breaks the 429 cycle that
+  killed runs #19/#20 (1 key) and #22 (both keys). If Kokoro also
+  fails AND AWS Polly keys exist, Polly is tried once; if Polly
+  also fails (or no AWS keys exist) the ORIGINAL Gemini error is
+  raised — fail loud, never silent/stub audio, never a masked error.
 - "polly": Polly only (previous behaviour; raises without AWS keys).
 
 Voice names come from config ("voice", default "Joanna"); both
 providers accept the Polly-style names — tools/gemini_tts maps
-Joanna -> Kore, Matthew -> Charon, Kajal -> Aoede.
+Joanna -> Kore, Matthew -> Charon, Kajal -> Aoede, and
+tools/kokoro_tts maps Joanna/Kore -> af_heart, Matthew/Charon ->
+am_adam. A Kokoro scene may sound slightly different from its
+Gemini neighbours (af_heart is not Kore); that is accepted over
+losing the whole video to a 429.
 
 Feeds accurate audio durations back into the scene timing model.
 
@@ -37,6 +44,7 @@ from loguru import logger
 from config_manager import get_config
 from models.script import SceneInfo, VideoScript
 from tools.gemini_tts import synthesize_speech as synthesize_speech_gemini
+from tools.kokoro_tts import synthesize_speech as synthesize_speech_kokoro
 from tools.polly import synthesize_speech as synthesize_speech_polly
 from tools.secrets import _get_secret_optional
 
@@ -67,11 +75,12 @@ def _polly_keys_present() -> bool:
 
 
 def _synthesize(text: str, voice: str) -> Tuple[str, float]:
-    """Synthesize *text* with the configured provider (+ Polly fallback).
+    """Synthesize *text* with the configured provider (+ fallbacks).
 
-    Gemini-first by default; Polly is tried once on Gemini failure
-    only when AWS keys exist. Raises the original Gemini error when
-    there is no usable fallback — never stub audio.
+    Gemini-first by default; Kokoro (local, no key) is tried on
+    Gemini failure; Polly is tried once after that, only when AWS
+    keys exist. Raises the original Gemini error when there is no
+    usable fallback — never stub audio.
     """
     provider = _tts_provider()
     if provider == "polly":
@@ -83,24 +92,33 @@ def _synthesize(text: str, voice: str) -> Tuple[str, float]:
     try:
         return synthesize_speech_gemini(text, voice=voice)
     except Exception as gemini_err:
-        if not _polly_keys_present():
-            logger.error(
-                f"Gemini TTS failed ({gemini_err}); no AWS Polly keys "
-                "exist, so there is no fallback. Raising."
-            )
-            raise
         logger.warning(
-            f"Gemini TTS failed ({gemini_err}); AWS Polly keys exist, "
-            "trying Polly once as fallback."
+            f"Gemini TTS failed ({gemini_err}); trying Kokoro local "
+            "fallback (no API key, no quota)."
         )
         try:
-            return synthesize_speech_polly(text, voice=voice, engine="neural")
-        except Exception as polly_err:
-            logger.error(
-                f"Polly fallback also failed ({polly_err}); raising the "
-                "original Gemini TTS error."
+            return synthesize_speech_kokoro(text, voice=voice)
+        except Exception as kokoro_err:
+            logger.warning(f"Kokoro fallback also failed ({kokoro_err}).")
+            if not _polly_keys_present():
+                logger.error(
+                    "Gemini TTS failed and Kokoro fallback failed; "
+                    "no AWS Polly keys exist, so there is no further "
+                    "fallback. Raising the original Gemini error."
+                )
+                raise gemini_err from kokoro_err
+            logger.warning(
+                "Gemini TTS and Kokoro both failed; AWS Polly keys "
+                "exist, trying Polly once as a last fallback."
             )
-            raise gemini_err from polly_err
+            try:
+                return synthesize_speech_polly(text, voice=voice, engine="neural")
+            except Exception as polly_err:
+                logger.error(
+                    f"Polly fallback also failed ({polly_err}); raising the "
+                    "original Gemini TTS error."
+                )
+                raise gemini_err from polly_err
 
 
 class TTSAgent:
