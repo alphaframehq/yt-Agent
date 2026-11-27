@@ -34,8 +34,13 @@ def _get_cache_path(url: str, ext: str = "mp4") -> Path:
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=5))
-def search_stock_videos(query: str, per_page: int = 5) -> List[Dict[str, Any]]:
-    """Search Pixabay Video API for relevant stock footage."""
+def search_stock_videos(query: str, per_page: int = 5, orientation: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Search Pixabay Video API for relevant stock footage.
+
+    ``orientation`` is passed straight to the Pixabay API
+    (``"vertical"`` for Shorts, so the footage is already 9:16
+    instead of landscape that must be cropped).
+    """
     api_key = get_secret("PIXABAY_KEY")
     if not api_key:
         logger.warning("PIXABAY_KEY not configured. Returning empty list.")
@@ -48,6 +53,8 @@ def search_stock_videos(query: str, per_page: int = 5) -> List[Dict[str, Any]]:
         "video_type": "film",
         "per_page": per_page,
     }
+    if orientation:
+        params["orientation"] = orientation
 
     try:
         with httpx.Client(timeout=25.0) as client:
@@ -74,7 +81,7 @@ def search_stock_videos(query: str, per_page: int = 5) -> List[Dict[str, Any]]:
         return []
 
 
-def search_stock_images(query: str, per_page: int = 5) -> List[Dict[str, Any]]:
+def search_stock_images(query: str, per_page: int = 5, orientation: Optional[str] = None) -> List[Dict[str, Any]]:
     """Search Pixabay Images API for royalty-free stills.
 
     Free fallback when AI image generation is unavailable (run #18:
@@ -83,6 +90,8 @@ def search_stock_images(query: str, per_page: int = 5) -> List[Dict[str, Any]]:
     Returns [] — never raises — when the key is missing, the search
     finds nothing, or the request fails, so the caller can fall
     through to the programmatic visual.
+    ``orientation`` is passed straight to the Pixabay API
+    (``"vertical"`` for Shorts).
     """
     api_key = _get_secret_optional("PIXABAY_KEY")
     if not api_key:
@@ -97,6 +106,8 @@ def search_stock_images(query: str, per_page: int = 5) -> List[Dict[str, Any]]:
         "per_page": per_page,
         "safesearch": "true",
     }
+    if orientation:
+        params["orientation"] = orientation
 
     try:
         with httpx.Client(timeout=25.0) as client:
