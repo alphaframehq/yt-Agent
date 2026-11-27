@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-11-27T09:56:47.325715+00:00",
+  "generated_at_utc": "2026-11-27T10:49:33.038234+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
@@ -15,7 +15,7 @@
       "rows": []
     },
     "yt_pipeline_runs": {
-      "count": 16,
+      "count": 17,
       "rows": [
         {
           "run_id": "run_850f5966",
@@ -272,6 +272,22 @@
             "shorts_video_ids": [],
             "cross_linked": false
           }
+        },
+        {
+          "run_id": "run_f47adb37",
+          "started_at": "1795776476",
+          "ttl": "1803552476",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "Claude Fable 5.2: Anthropic Ka Naya King Model",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "skipped",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
         }
       ]
     },
@@ -284,7 +300,7 @@
       "rows": []
     },
     "yt_topics_queue": {
-      "count": 62,
+      "count": 64,
       "rows": [
         {
           "topic_id": "top_093c6fb1",
@@ -306,7 +322,7 @@
           "topic_id": "top_5bbb4d2b",
           "topic": "Claude Fable 5.2: Anthropic Ka Naya King Model",
           "pillar": "ai_everything",
-          "status": "pending",
+          "status": "running",
           "priority": "9",
           "added_at": "1795697836"
         },
@@ -314,7 +330,7 @@
           "topic_id": "top_a35bfc28",
           "topic": "Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO",
           "pillar": "ai_everything",
-          "status": "pending",
+          "status": "running",
           "priority": "9",
           "added_at": "1795697836"
         },
@@ -781,6 +797,22 @@
           "status": "pending",
           "priority": "2",
           "added_at": "1795755785"
+        },
+        {
+          "topic_id": "top_6df8b1f7",
+          "topic": "Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "2",
+          "added_at": "1795776469"
+        },
+        {
+          "topic_id": "top_f2ec2fff",
+          "topic": "[Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impac",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "2",
+          "added_at": "1795776489"
         }
       ]
     },
@@ -789,7 +821,7 @@
       "rows": []
     },
     "yt_trends": {
-      "count": 5,
+      "count": 8,
       "rows": [
         {
           "topic_hash": "3ed233e0751d73ae1bed4fea18f16b0f",
@@ -882,6 +914,60 @@
             "bing_news"
           ],
           "fetched_at": "1795770934"
+        },
+        {
+          "topic_hash": "8710cc8c27a06448b3515c6414c9591a",
+          "topic": "Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence",
+          "pillar": "ai_everything",
+          "angles_json": [
+            "Trending now: Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence - Broadband Breakfast — what it means for Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence",
+            "Trending now: OpenAI says it corrected a GPT-6.2 Astra and Sol launch billing mistake that had incorrectly discounted usage; Astra users will now hit their limits 40% faster (Graham Barlow/TechRadar) — what it means for Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence",
+            "Trending now: 1 Incredibly Cheap Artificial Intelligence (AI) Stock to Buy Before It Doubles in 2027 - The Motley Fool — what it means for Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence",
+            "Trending now: Billionaire David Tepper of Appaloosa Management Has 65% of His Portfolio Invested in These 7 Artificial Intelligence (AI) Stocks. Here Are the 3 I’d Buy Hand Over Fist Right Now - Yahoo Finance — what it means for Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence",
+            "Trending now: Artificial Intelligence-Personalized Skincare Regimen for Skin Aging: A 12-Week Clinical Study - Cureus — what it means for Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence"
+          ],
+          "sources_json": [
+            "google_news",
+            "techmeme"
+          ],
+          "fetched_at": "1795776468"
+        },
+        {
+          "topic_hash": "4d3229a54453b78c3a7dff60eecb239b",
+          "topic": "[Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impac",
+          "pillar": "ai_everything",
+          "angles_json": [
+            "Trending now: [Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impact on Work — what it means for [Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impac",
+            "Trending now: Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence - Broadband Breakfast — what it means for [Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impac",
+            "Trending now: OpenAI says it corrected a GPT-6.2 Astra and Sol launch billing mistake that had incorrectly discounted usage; Astra users will now hit their limits 40% faster (Graham Barlow/TechRadar) — what it means for [Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impac",
+            "Trending now: Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It. — what it means for [Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impac",
+            "Trending now: 1 Incredibly Cheap Artificial Intelligence (AI) Stock to Buy Before It Doubles in 2027 - The Motley Fool — what it means for [Latest for 2026] What is AGI (Artificial General Intelligence)? Explaining the Differences with ChatGPT, Timeline to Realization, and Impac"
+          ],
+          "sources_json": [
+            "bing_news",
+            "google_news",
+            "techmeme"
+          ],
+          "fetched_at": "1795776488"
+        },
+        {
+          "topic_hash": "0cf29d8202a78140a0ae164ecb97b1b8",
+          "topic": "Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO",
+          "pillar": "ai_everything",
+          "angles_json": [
+            "Trending now: Anthropic's IPO Raised $81 Billion. Here’s Which Artificial Intelligence (AI) Stocks Will Benefit From Where the Money Goes. - The Globe and Mail — what it means for Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO",
+            "Trending now: Anthropic's blockbuster debut tests Wall Street's faith in AI boom - Reuters — what it means for Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO",
+            "Trending now: Anthropic IPO raises over $81 billion in largest offering on record, topping SpaceX - CNBC — what it means for Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO",
+            "Trending now: Was Anthropic’s record US$81 billion listing a vote of confidence in AI – and what’s next? - The Conversation — what it means for Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO",
+            "Trending now: Anthropic Raises $81 Billion in Biggest IPO Ever - WSJ — what it means for Anthropic IPO: $81 Billion — AI History Ka Sabse Bada IPO"
+          ],
+          "sources_json": [
+            "google_news",
+            "hacker_news",
+            "techmeme",
+            "bing_news"
+          ],
+          "fetched_at": "1795776496"
         }
       ]
     },
@@ -893,14 +979,14 @@
   "summary": {
     "videos_total": 0,
     "videos_by_status": {},
-    "queue_total": 62,
+    "queue_total": 64,
     "queue_by_status": {
-      "running": 6,
+      "running": 8,
       "pending": 56
     },
     "pending_requests": 0,
     "requests_total": 0,
-    "pipeline_runs_total": 16,
+    "pipeline_runs_total": 17,
     "config_keys": [],
     "active_models": null
   }
