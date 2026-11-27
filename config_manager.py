@@ -46,6 +46,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # NOTE: a verify_chain row stored in the Sheets yt_config tab
         # overrides this default — update that row too for the live
         # run to pick the removal up.
+        # 27 Nov 2026: Bluesminds (paid, $100 balance) sits AFTER the
+        # free Gemini pool and BEFORE OpenRouter — Gemini stays
+        # primary because it is free; Bluesminds is spent only when
+        # the free tier is exhausted. Key: BLUESMINDS_API_KEY (GitHub
+        # repo secret); model override: BLUESMINDS_MODEL env.
+        ["bluesminds", "moonshotai/kimi-k3"],
         ["openrouter", "openrouter/free"],
     ],
     "pillar_split": {
