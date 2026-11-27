@@ -65,6 +65,23 @@ class TestResearchAgent(unittest.TestCase):
         for topic in ("How Stripe Makes Money", "How Revolut Makes Money", "Solana Pay Architecture"):
             self.assertIsNone(agent._infer_ticker(topic))
 
+    def test_source_info_published_at_defaults_to_none(self):
+        """SourceInfo.published_at (27 Nov 2026 freshness): optional —
+        None when the source gives no date, round-trips when given."""
+        from models.research import SourceInfo
+
+        bare = SourceInfo(
+            claim_id="c0", claim="X", source="S",
+            url="https://example.com", snippet="s", confidence=0.9,
+        )
+        self.assertIsNone(bare.published_at)
+        dated = SourceInfo(
+            claim_id="c1", claim="X", source="S",
+            url="https://example.com", snippet="s", confidence=0.9,
+            published_at="2026-11-27T10:00:00+00:00",
+        )
+        self.assertEqual(dated.published_at, "2026-11-27T10:00:00+00:00")
+
 
 if __name__ == "__main__":
     unittest.main()
