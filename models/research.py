@@ -8,7 +8,7 @@ content-gap insights.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -90,6 +90,11 @@ class SourceInfo(BaseModel):
         ge=0,
         le=1,
         description="Confidence score for this citation (0-1).",
+    )
+    published_at: Optional[str] = Field(
+        default=None,
+        description="Publication date/time of the source (ISO-8601) "
+        "when the source gives one; None when undated.",
     )
 
 
