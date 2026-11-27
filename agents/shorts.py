@@ -70,6 +70,7 @@ def upload_shorts(
     cost_usd: float = 0.0,
     bundle: Optional[ResearchBundle] = None,
     long_video: Optional[Any] = None,
+    related: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Upload already-rendered Shorts, one by one, independently.
 
@@ -83,8 +84,11 @@ def upload_shorts(
     References" block to each Short's description;
     ``long_video`` (optional ``{"title", "yt_video_id", ...}`` or a
     bare YouTube video ID) adds the "Watch next" link to the same
-    day's long video. Both are best-effort: a linking failure never
-    fails a Short's upload.
+    day's long video; ``related`` (optional previous channel videos)
+    is appended to that block — when None and a bundle is given it
+    is read best-effort from the yt_videos Sheet tab per Short.
+    Both are best-effort: a linking failure never fails a Short's
+    upload.
     """
     results: List[Dict[str, Any]] = []
     for index, (video_path, short_script) in enumerate(shorts):
@@ -103,6 +107,7 @@ def upload_shorts(
                 cost_usd=cost_usd,
                 bundle=bundle,
                 long_video=long_video,
+                related=related,
             )
             logger.info(f"Short {index} uploaded: {result.yt_video_id} ('{title}')")
             results.append(
@@ -126,13 +131,17 @@ def render_and_upload_shorts(
     rendered: Optional[Sequence[Tuple[str, ShortsScript]]] = None,
     cost_usd: float = 0.0,
     long_video: Optional[Any] = None,
+    related: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Render (if needed) and upload ``count`` Shorts for the day.
 
     ``long_video`` (optional ``{"title", "yt_video_id", ...}`` or a
     bare YouTube video ID) is the same day's long video: each Short's
     description links it via a "Watch next" block, and the bundle
-    adds the "Sources / References" block. Both are best-effort.
+    adds the "Sources / References" block. ``related`` (optional
+    previous channel videos) is appended to that "Watch next" block;
+    when None it is read best-effort from the yt_videos Sheet tab
+    per Short. Both are best-effort.
 
     If ``rendered`` pairs are supplied (the pipeline's
     ``node_finalize`` already rendered them), those files + scripts
@@ -175,7 +184,7 @@ def render_and_upload_shorts(
 
     return upload_shorts(
         pairs, parent_topic=parent_topic, cost_usd=cost_usd,
-        bundle=bundle, long_video=long_video,
+        bundle=bundle, long_video=long_video, related=related,
     )
 
 
