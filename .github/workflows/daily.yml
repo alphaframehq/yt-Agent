@@ -47,6 +47,10 @@ jobs:
       AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
       AWS_REGION: ${{ secrets.AWS_REGION || secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
       GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      # 27 Nov 2026 (TTS fix, runs #19/#20): second Gemini key from a      
+      # different GCP project — tools/secrets.py rotates GEMINI_KEY_1..20      
+      # on 429. Without this export the runner pool stays at 1 key.      
+      GEMINI_KEY_2: ${{ secrets.GEMINI_KEY_2 }}      
       OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
       TINYFISH_API_KEY: ${{ secrets.TINYFISH_API_KEY }}
       PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
