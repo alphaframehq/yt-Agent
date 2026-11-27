@@ -1,10 +1,49 @@
 {
-  "generated_at_utc": "2026-11-27T12:57:44.871265+00:00",
+  "generated_at_utc": "2026-11-27T14:16:45.478599+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
-      "count": 0,
-      "rows": []
+      "count": 1,
+      "rows": [
+        {
+          "video_id": "vid_016da5c9",
+          "title": "ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+          "topic": "ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+          "yt_video_id": "W0khre5Fxsw",
+          "yt_url": "https://youtu.be/W0khre5Fxsw",
+          "status": "pending_approval",
+          "created_at": "1795788386",
+          "published_at": null,
+          "cost_usd": "0",
+          "extra_json": {
+            "pillar": "ai_everything",
+            "description_preview": "DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do not endors",
+            "description": "DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do not endorse buying or selling any security.\n\nChatGPT Wallet explores the intersection of autonomous AI agents, financial workflows, and Model Context Protocol servers. Discover how recent developments in machine learning uncertainty, self-hosted AI architectures, and platform security protocols are reshaping digital automation.\n\nWe examine the underlying mechanisms of agentic workflows, the security implications highlighted by recent industry events, and what developers must watch out for as AI systems gain deeper integration into daily software infrastructure.\n\nWatch next on this channel for more deep dives into cutting-edge artificial intelligence, systems engineering, and technical breakdowns.\n\nTags: ChatGPT Wallet, AI Agents, Model Context Protocol, Machine Learning Uncertainty, Self-Hosted AI, AI Security, Tech News, Google Workspace AI, Software Engineering, AI Architecture, Autonomous Agents, Developer Tools, Tech Analysis, Future of AI\n\nWhat this video covers:\n• Hook: Google just restricted its own Workspace AI agents on MCP servers from sending emails, while independent developers build group chats where AI agents talk behind…\n• What Changed: Recent reports from Hacker News highlight a profound shift in software engineering: AI tools have made self-hosting fun again while introducing complex orchestration layers like…\n• How It Works: Under the hood, these agentic workflows rely on large language models processing prompts through specialized protocol servers. However, understanding machine learning uncertainty is crucial, as…\n• Why It Matters: For developers and businesses, autonomous agents unlock unprecedented automation potential, but they also introduce severe operational vulnerabilities. If you want to understand the broader implications…\n• Risks And Scams: The risks are not theoretical. High-profile security breaches, such as the recent indictment of the CTO of RansomwareHelp for wire fraud reported on Krebs on…\n• Predictions: Looking ahead, we predict that platform providers will implement much stricter permission sandboxes for MCP servers and agentic financial transactions, as enterprise adoption forces tighter…\n• Disclaimer: DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do…\n• Cta: Subscribe to TubePilot AI for weekly engineering deep dives into the plumbing of global finance.…\n\nSources / References:\n• The group chat where your AI talks behind your back — Hacker News — https://construct22.com/\n• AI made self-hosting fun again — Hacker News — https://janlukas.blog/posts/ai-self-hosting\n• CTO of 'RansomwareHelp' indicted for wire fraud — Hacker News — https://krebsonsecurity.com/2026/11/cto-of-ransomwarehelp-indicted-for-wire-fraud/\n• Google Will Make AI Agents Use Its MCP Servers. The Gmail One Can't Send Email — Hacker News — https://techstackups.com/articles/google-workspace-ai-agents-mcp/\n• An introduction to uncertainty in machine learning — Hacker News — https://chrhenning.com/blog/2026/introduction-to-uncertainty/\n• Trend signals: hacker_news, techmeme, bing_news",
+            "tags": [
+              "ChatGPT Wallet",
+              "AI Agents",
+              "Model Context Protocol",
+              "Machine Learning Uncertainty",
+              "Self-Hosted AI",
+              "AI Security",
+              "Tech News",
+              "Google Workspace AI",
+              "Software Engineering",
+              "AI Architecture",
+              "Autonomous Agents",
+              "Developer Tools",
+              "Tech Analysis",
+              "Future of AI",
+              "Artificial Intelligence"
+            ],
+            "thumbnail_url": null,
+            "script_json": "{\"pillar\":\"ai_everything\",\"scenes\":[{\"id\":1,\"section\":\"hook\",\"narration\":\"Google just restricted its own Workspace AI agents on MCP servers from sending emails, while independent developers build group chats where AI agents talk behind your back. This shift towards autonomous digital execution completely changes how intelligent systems interact with financial interfaces and personal data.\",\"visual_prompt\":\"Cinematic dark-mode UI displaying terminal logs, MCP server architecture schematics, and flashing warning dialogs.\",\"visual_type\":\"ai_image\",\"chart_type\":null,\"duration_sec\":18,\"citations\":[\"context_0\",\"context_3\"]},{\"id\":2,\"section\":\"what_changed\",\"narration\":\"Recent reports from Hacker News highlight a profound shift in software engineering: AI tools have made self-hosting fun again while introducing complex orchestration layers like Model Context Protocol servers. Major tech platforms are racing to deploy agents capable of handling workflows, raising critical security and architectural questions.\",\"visual_prompt\":\"A clean technology architecture diagram showing local self-hosted environments connecting to MCP servers.\",\"visual_type\":\"diagram\",\"chart_type\":null,\"duration_sec\":22,\"citations\":[\"context_1\",\"context_3\"]},{\"id\":3,\"section\":\"how_it_works\",\"narration\":\"Under the hood, these agentic workflows rely on large language models processing prompts through specialized protocol servers. However, understanding machine learning uncertainty is crucial, as probabilistic models inherently struggle with deterministic financial accuracy and permission boundaries.\",\"visual_prompt\":\"An animated schematic illustrating model uncertainty curves and API boundary enforcement layers.\",\"visual_type\":\"diagram\",\"chart_type\":null,\"duration_sec\":19,\"citations\":[\"context_3\",\"context_4\"]},{\"id\":4,\"section\":\"why_it_matters\",\"narration\":\"For developers and businesses, autonomous agents unlock unprecedented automation potential, but they also introduce severe operational vulnerabilities. If you want to understand the broader implications on digital security, we broke this down in detail in our video on this topic — link description mein hai.\",\"visual_prompt\":\"Split screen showing enterprise dashboard metrics alongside code repositories. On-screen text: Watch next on this channel\",\"visual_type\":\"ai_image\",\"chart_type\":null,\"duration_sec\":19,\"citations\":[\"context_0\",\"context_1\"]},{\"id\":5,\"section\":\"risks_and_scams\",\"narration\":\"The risks are not theoretical. High-profile security breaches, such as the recent indictment of the CTO of RansomwareHelp for wire fraud reported on Krebs on Security, demonstrate that malicious actors actively target automation infrastructure and trust protocols.\",\"visual_prompt\":\"Red-themed security alert overlay showing warning vectors and cybersecurity threat logs.\",\"visual_type\":\"ai_image\",\"chart_type\":null,\"duration_sec\":17,\"citations\":[\"context_2\"]},{\"id\":6,\"section\":\"predictions\",\"narration\":\"Looking ahead, we predict that platform providers will implement much stricter permission sandboxes for MCP servers and agentic financial transactions, as enterprise adoption forces tighter security compliance across all AI deployments.\",\"visual_prompt\":\"Futuristic timeline visualization showing increasing security hardening phases for AI agents.\",\"visual_type\":\"diagram\",\"chart_type\":null,\"duration_sec\":15,\"citations\":[\"context_3\"]},{\"id\":7,\"section\":\"disclaimer\",\"narration\":\"DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do not endorse buying or selling any security.\",\"visual_prompt\":\"Clean corporate compliance text card on a dark neutral background.\",\"visual_type\":\"ai_image\",\"chart_type\":null,\"duration_sec\":16,\"citations\":[]},{\"id\":8,\"section\":\"cta\",\"narration\":\"Subscribe to TubePilot AI for weekly engineering deep dives into the plumbing of global finance.\",\"visual_prompt\":\"Channel branding card with subscribe button animation and clean minimalist layout.\",\"visual_type\":\"ai_image\",\"chart_type\":null,\"duration_sec\":7,\"citations\":[]}],\"seo\":{\"title\":\"ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega\",\"description\":\"DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do not endorse buying or selling any security.\\n\\nChatGPT Wallet explores the intersection of autonomous AI agents, financial workflows, and Model Context Protocol servers. Discover how recent developments in machine learning uncertainty, self-hosted AI architectures, and platform security protocols are reshaping digital automation.\\n\\nWe examine the underlying mechanisms of agentic workflows, the security implications highlighted by recent industry events, and what developers must watch out for as AI systems gain deeper integration into daily software infrastructure.\\n\\nWatch next on this channel for more deep dives into cutting-edge artificial intelligence, systems engineering, and technical breakdowns.\\n\\nTags: ChatGPT Wallet, AI Agents, Model Context Protocol, Machine Learning Uncertainty, Self-Hosted AI, AI Security, Tech News, Google Workspace AI, Software Engineering, AI Architecture, Autonomous Agents, Developer Tools, Tech Analysis, Future of AI\\n\\nWhat this video covers:\\n• Hook: Google just restricted its own Workspace AI agents on MCP servers from sending emails, while independent developers build group chats where AI agents talk behind…\\n• What Changed: Recent reports from Hacker News highlight a profound shift in software engineering: AI tools have made self-hosting fun again while introducing complex orchestration layers like…\\n• How It Works: Under the hood, these agentic workflows rely on large language models processing prompts through specialized protocol servers. However, understanding machine learning uncertainty is crucial, as…\\n• Why It Matters: For developers and businesses, autonomous agents unlock unprecedented automation potential, but they also introduce severe operational vulnerabilities. If you want to understand the broader implications…\\n• Risks And Scams: The risks are not theoretical. High-profile security breaches, such as the recent indictment of the CTO of RansomwareHelp for wire fraud reported on Krebs on…\\n• Predictions: Looking ahead, we predict that platform providers will implement much stricter permission sandboxes for MCP servers and agentic financial transactions, as enterprise adoption forces tighter…\\n• Disclaimer: DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do…\\n• Cta: Subscribe to TubePilot AI for weekly engineering deep dives into the plumbing of global finance.…\",\"tags\":[\"ChatGPT Wallet\",\"AI Agents\",\"Model Context Protocol\",\"Machine Learning Uncertainty\",\"Self-Hosted AI\",\"AI Security\",\"Tech News\",\"Google Workspace AI\",\"Software Engineering\",\"AI Architecture\",\"Autonomous Agents\",\"Developer Tools\",\"Tech Analysis\",\"Future of AI\",\"Artificial Intelligence\"],\"chapters\":[{\"time\":\"00:00\",\"title\":\"Hook\"},{\"time\":\"00:45\",\"title\":\"What Changed\"},{\"time\":\"01:35\",\"title\":\"How It Works\"},{\"time\":\"02:30\",\"title\":\"Why It Matters\"},{\"time\":\"03:30\",\"title\":\"Risks and Scams\"},{\"time\":\"04:25\",\"title\":\"Predictions\"},{\"time\":\"05:10\",\"title\":\"Disclaimer\"},{\"time\":\"05:25\",\"title\":\"Call to Action\"}]},\"meta\":{\"word_count\":288,\"estimated_duration_sec\":115}}",
+            "verification_score": 0.99,
+            "verification_overall": "pass",
+            "duration_sec": 133.266667
+          }
+        }
+      ]
     },
     "yt_research_cache": {
       "count": 0,
@@ -374,7 +413,7 @@
           "topic_id": "top_ecbf2078",
           "topic": "ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
           "pillar": "ai_everything",
-          "status": "pending",
+          "status": "running",
           "priority": "9",
           "added_at": "1795697836"
         },
@@ -841,7 +880,7 @@
       "rows": []
     },
     "yt_trends": {
-      "count": 8,
+      "count": 9,
       "rows": [
         {
           "topic_hash": "3ed233e0751d73ae1bed4fea18f16b0f",
@@ -988,6 +1027,24 @@
             "bing_news"
           ],
           "fetched_at": "1795776496"
+        },
+        {
+          "topic_hash": "6a8867fd37b6ec2f243ffca0895cc660",
+          "topic": "ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+          "pillar": "ai_everything",
+          "angles_json": [
+            "Trending now: The group chat where your AI talks behind your back — what it means for ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+            "Trending now: AI made self-hosting fun again — what it means for ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+            "Trending now: CTO of 'RansomwareHelp' indicted for wire fraud — what it means for ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+            "Trending now: Google Will Make AI Agents Use Its MCP Servers. The Gmail One Can't Send Email — what it means for ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega",
+            "Trending now: An introduction to uncertainty in machine learning — what it means for ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega"
+          ],
+          "sources_json": [
+            "hacker_news",
+            "techmeme",
+            "bing_news"
+          ],
+          "fetched_at": "1795787777"
         }
       ]
     },
@@ -1112,12 +1169,14 @@
     }
   },
   "summary": {
-    "videos_total": 0,
-    "videos_by_status": {},
+    "videos_total": 1,
+    "videos_by_status": {
+      "pending_approval": 1
+    },
     "queue_total": 64,
     "queue_by_status": {
-      "running": 8,
-      "pending": 56
+      "running": 9,
+      "pending": 55
     },
     "pending_requests": 0,
     "requests_total": 0,
