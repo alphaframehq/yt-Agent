@@ -34,6 +34,15 @@ faster-whisper>=1.0
 
 # TTS
 # (uses boto3 for Polly)
+# Kokoro local fallback (27 Nov 2026, run #22): both Gemini keys hit
+# HTTP 429 together, so the pipeline needs a TTS engine with no API
+# key and no quota. kokoro-onnx (ONNX Runtime, CPU) synthesizes
+# locally; the ~310 MB model file downloads on first use into
+# cache/kokoro/ (see tools/kokoro_tts.py). Pinned to 0.6.1 — it
+# supports Python 3.10-3.13 (CI runs 3.11) and pulls onnxruntime +
+# phonemizer + espeakng-loader itself. Do NOT swap in the torch
+# `kokoro` package: it is far heavier and the runner has no GPU.
+kokoro-onnx==0.6.1
 
 # Telegram
 python-telegram-bot>=20.0
