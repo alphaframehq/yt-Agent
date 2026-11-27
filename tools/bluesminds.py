@@ -40,12 +40,14 @@ __all__ = [
 
 BLUESMINDS_BASE_URL = "https://api.bluesminds.com/v1"
 
-# Default model (27 Nov 2026): moonshotai/kimi-k3 — long-context,
-# strong at research/script writing. Override with the env var
-# BLUESMINDS_MODEL; other verified options on the account include
-# nvidia/nemotron-3-nano-omni-30b-a3b-reasoning and
-# nvidia/nemotron-3.5-lightning-30b-a3b.
-BLUESMINDS_DEFAULT_MODEL = "moonshotai/kimi-k3"
+# Default model (27 Nov 2026): nvidia/nemotron-3.5-lightning-30b-a3b —
+# fast reasoning model, live-verified by the parent 27 Nov 2026 with a
+# bundle-sized script prompt (HTTP 200, valid JSON, 3 scenes, ~60s).
+# It replaced moonshotai/kimi-k3, which returns HTTP 410 (gone) on
+# Bluesminds — see run #24's log and tests/test_no_retired_models.py.
+# Override with the env var BLUESMINDS_MODEL; other options on the
+# account include nvidia/nemotron-3-nano-omni-30b-a3b-reasoning.
+BLUESMINDS_DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 # Retry policy for transient failures (429 rate-limit, 5xx server
 # errors): at most this many attempts, exponential backoff between
@@ -74,7 +76,7 @@ class BluesmindsError(RuntimeError):
 
 
 def get_bluesminds_model() -> str:
-    """Model to use: env ``BLUESMINDS_MODEL`` or the kimi-k3 default."""
+    """Model to use: env ``BLUESMINDS_MODEL`` or the nemotron-3.5-lightning default."""
     return os.environ.get("BLUESMINDS_MODEL") or BLUESMINDS_DEFAULT_MODEL
 
 
@@ -125,7 +127,7 @@ def call_bluesminds(
     user_prompt: str,
     model: Optional[str] = None,
     temperature: float = 0.2,
-    timeout: float = 60.0,
+    timeout: float = 300.0,
     max_attempts: int = MAX_ATTEMPTS,
 ) -> str:
     """Call Bluesminds chat completions and return the plain text reply.
@@ -134,9 +136,13 @@ def call_bluesminds(
         system_prompt: System instructions for the model.
         user_prompt: The user message.
         model: Model id; ``None`` means the env/default model
-            (``BLUESMINDS_MODEL`` or ``moonshotai/kimi-k3``).
+            (``BLUESMINDS_MODEL`` or
+            ``nvidia/nemotron-3.5-lightning-30b-a3b``).
         temperature: Sampling temperature.
-        timeout: Per-request HTTP timeout in seconds.
+        timeout: Per-request HTTP timeout in seconds (default 300 —
+            the fallback model is slow, ~60s for a bundle prompt
+            with a long reasoning trace, so no timeout below 300s
+            is used for this provider).
         max_attempts: Total attempts on 429/5xx (default 3).
 
     Returns:
