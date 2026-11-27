@@ -27,7 +27,9 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -94,7 +96,13 @@ class _FakeClient:
 
 
 def _rss_report():
-    """A TrendReport with two real-looking RSS items (run #14 topic)."""
+    """A TrendReport with two real-looking RSS items (run #14 topic).
+
+    Publish dates are relative to now (fresh) — the 7-day max-age
+    filter (27 Nov 2026) drops stale items, so fixed old epochs
+    would make this fixture vanish from every fallback test.
+    """
+    now = int(time.time())
     return TrendReport(
         topic="LLM Training Kaise Hoti Hai?",
         pillar="ai_everything",
@@ -105,14 +113,14 @@ def _rss_report():
                 source="google_news",
                 url="https://example.com/news/llm-pretraining",
                 snippet="Pretraining on trillions of tokens, then RLHF.",
-                published_at=1764000000,
+                published_at=now - 3600,
             ),
             TrendItem(
                 title="RLHF Explained: Why Human Feedback Matters",
                 source="hacker_news",
                 url="https://example.com/hn/rlhf-explained",
                 snippet="Reward models rank outputs before fine-tuning.",
-                published_at=1763900000,
+                published_at=now - 7200,
             ),
         ],
         sources=["google_news", "hacker_news"],
@@ -152,6 +160,10 @@ class TestTinySearchNewHost(unittest.TestCase):
 
     def test_gets_new_host_with_api_key_header(self):
         """GET api.search.tinyfish.ai, X-API-Key (not Bearer), news first."""
+        # Publish date is relative to now (fresh) — the 7-day max-age
+        # filter (27 Nov 2026) drops stale articles.
+        recent = datetime.now(timezone.utc).isoformat()
+
         def behavior(url, headers, params):
             self.assertEqual(url, TINYSEARCH_URL)
             self.assertEqual(headers, {"X-API-Key": "test-key"})
@@ -165,7 +177,7 @@ class TestTinySearchNewHost(unittest.TestCase):
                     "title": "LLM Training Breakthrough",
                     "snippet": "New pretraining recipe cuts cost.",
                     "url": "https://example.com/llm-breakthrough",
-                    "date": "2026-11-26T10:00:00Z",
+                    "date": recent,
                 }
             ]))
 
@@ -175,7 +187,7 @@ class TestTinySearchNewHost(unittest.TestCase):
         self.assertEqual(len(articles), 1)
         self.assertEqual(articles[0]["title"], "LLM Training Breakthrough")
         self.assertEqual(articles[0]["source"], "Example AI News")
-        self.assertEqual(articles[0]["published_at"], "2026-11-26T10:00:00Z")
+        self.assertEqual(articles[0]["published_at"], recent)
         self.assertEqual(articles[0]["url"], "https://example.com/llm-breakthrough")
 
     def test_news_400_falls_through_to_web(self):
@@ -340,6 +352,139 @@ class TestTinySearchRssFallback(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# News freshness (27 Nov 2026): 24h cache TTL + 7-day max article age
+# ---------------------------------------------------------------------------
+
+class TestNewsFreshness(unittest.TestCase):
+    """A cached result must expire (24h TTL) and month-old news must
+    not be cited as current (7-day max age). Undated articles are
+    kept — their age cannot be verified."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_cache = tinyfish.CACHE_DIR
+        tinyfish.CACHE_DIR = Path(self._tmp.name)
+        _FakeClient.calls = []
+        _FakeClient.behavior = None
+        self._client_patcher = patch.object(httpx, "Client", _FakeClient)
+        self._client_patcher.start()
+        self._key_patcher = patch.object(
+            tinyfish, "get_secret", return_value="test-key"
+        )
+        self._key_patcher.start()
+
+    def tearDown(self):
+        self._key_patcher.stop()
+        self._client_patcher.stop()
+        tinyfish.CACHE_DIR = self._orig_cache
+        self._tmp.cleanup()
+
+    def _article(self, title, age_days=None, date_str=None):
+        item = {
+            "position": 1,
+            "site_name": "example.com",
+            "publisher": "Example AI News",
+            "title": title,
+            "snippet": "Snippet.",
+            "url": f"https://example.com/{title.lower().replace(' ', '-')}",
+        }
+        if date_str is not None:
+            item["date"] = date_str
+        elif age_days is not None:
+            item["date"] = (
+                datetime.now(timezone.utc) - timedelta(days=age_days)
+            ).isoformat()
+        return item
+
+    def test_stale_tinysearch_articles_dropped(self):
+        """News returns 1 fresh + 1 month-old article: only fresh is served."""
+        _FakeClient.behavior = lambda u, h, p: _FakeResponse(
+            200, _tinysearch_payload([
+                self._article("Fresh Breakthrough", age_days=1),
+                self._article("Month-Old News", age_days=30),
+            ])
+        )
+        articles = tinyfish.search_fintech_context("Freshness Mixed Topic")
+        self.assertEqual([a["title"] for a in articles], ["Fresh Breakthrough"])
+
+    def test_all_stale_tinysearch_falls_back_to_rss(self):
+        """News + web return only month-old articles: RSS saves the run."""
+        _FakeClient.behavior = lambda u, h, p: _FakeResponse(
+            200, _tinysearch_payload([self._article("Month-Old News", age_days=30)])
+        )
+        with patch("tools.trends.fetch_trends", return_value=_rss_report()):
+            articles = tinyfish.search_fintech_context("Freshness Stale Topic")
+        self.assertEqual(len(articles), 2)
+        self.assertEqual(articles[0]["title"], "How LLM Pretraining Actually Works")
+
+    def test_stale_rss_items_dropped(self):
+        """TinySearch dead + RSS has 1 fresh + 1 stale item: only fresh."""
+        _FakeClient.behavior = lambda u, h, p: (_ for _ in ()).throw(
+            httpx.ConnectError("dead", request=httpx.Request("GET", u))
+        )
+        now = int(time.time())
+        report = TrendReport(
+            topic="Freshness RSS Topic", pillar="ai_everything", angles=[],
+            items=[
+                TrendItem(
+                    title="Fresh RSS News", source="google_news",
+                    url="https://example.com/fresh",
+                    snippet="Fresh.", published_at=now - 3600,
+                ),
+                TrendItem(
+                    title="Stale RSS News", source="google_news",
+                    url="https://example.com/stale",
+                    snippet="Stale.", published_at=now - 30 * 86400,
+                ),
+            ],
+            sources=["google_news"], errors=[],
+        )
+        with patch("tools.trends.fetch_trends", return_value=report):
+            articles = tinyfish.search_fintech_context("Freshness RSS Topic")
+        self.assertEqual([a["title"] for a in articles], ["Fresh RSS News"])
+
+    def test_undated_articles_kept(self):
+        """An article with no date at all is kept (age unverifiable)."""
+        _FakeClient.behavior = lambda u, h, p: _FakeResponse(
+            200, _tinysearch_payload([self._article("Undated Guide")])
+        )
+        articles = tinyfish.search_fintech_context("Freshness Undated Topic")
+        self.assertEqual([a["title"] for a in articles], ["Undated Guide"])
+        self.assertEqual(articles[0]["published_at"], "")
+
+    def test_fresh_cache_served_without_http(self):
+        """A cache entry written minutes ago is served, no HTTP call."""
+        cache_path = tinyfish._get_cache_path("search:Freshness Cache Hit")
+        cache_path.write_text(json.dumps([{
+            "title": "Cached Fresh Article", "snippet": "Cached.",
+            "url": "https://example.com/cached", "source": "TinyFish",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        }]), encoding="utf-8")
+        articles = tinyfish.search_fintech_context("Freshness Cache Hit")
+        self.assertEqual(_FakeClient.calls, [])
+        self.assertEqual(articles[0]["title"], "Cached Fresh Article")
+
+    def test_stale_cache_older_than_24h_refetched(self):
+        """A cache entry older than 24h is ignored and re-fetched."""
+        cache_path = tinyfish._get_cache_path("search:Freshness Cache Stale")
+        cache_path.write_text(json.dumps([{
+            "title": "Cached Old Article", "snippet": "Cached.",
+            "url": "https://example.com/cached-old", "source": "TinyFish",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        }]), encoding="utf-8")
+        old = time.time() - 25 * 3600
+        os.utime(cache_path, (old, old))
+        _FakeClient.behavior = lambda u, h, p: _FakeResponse(
+            200, _tinysearch_payload([
+                self._article("Refetched Fresh Article", age_days=0)
+            ])
+        )
+        articles = tinyfish.search_fintech_context("Freshness Cache Stale")
+        self.assertEqual(len(_FakeClient.calls), 1)
+        self.assertEqual(articles[0]["title"], "Refetched Fresh Article")
+
+
+# ---------------------------------------------------------------------------
 # Sheets telemetry fix (run #14 "Invalid values" warning)
 # ---------------------------------------------------------------------------
 
@@ -443,6 +588,12 @@ class TestAiResearchRssFallback(unittest.TestCase):
         self.assertEqual(bundle.sources[0].source, "Google News")
         self.assertEqual(
             bundle.sources[0].url, "https://example.com/news/llm-pretraining"
+        )
+        # Freshness (27 Nov 2026): the source carries its publish date.
+        self.assertTrue(bundle.sources[0].published_at)
+        parsed = datetime.fromisoformat(bundle.sources[0].published_at)
+        self.assertLess(
+            (datetime.now(timezone.utc) - parsed).total_seconds(), 86400
         )
         self.assertGreater(bundle.research_confidence, 0)
 
