@@ -76,6 +76,19 @@ __all__ = [
 # YouTube's description limit (upload_private truncates at the same
 # value; the builder enforces it first so blocks are never cut).
 MAX_DESCRIPTION_CHARS = 5000
+# Simulated/placeholder video IDs (dry-run stand-ins) must never be
+# linked in a description — same refusal as cross_link_daily_uploads
+# raises for a simulated long video ID.
+_SIMULATED_ID_PREFIXES = ("yt_sim_", "yt_priv_")
+
+
+def _is_simulated_video_id(video_id: Any) -> bool:
+    """True for dry-run placeholder IDs (``yt_sim_*`` / ``yt_priv_*``)."""
+    return isinstance(video_id, str) and video_id.startswith(
+        _SIMULATED_ID_PREFIXES
+    )
+
+
 WATCH_NEXT_HEADER = "Watch next:"
 SOURCES_HEADER = "Sources / References:"
 
@@ -252,7 +265,7 @@ def cross_link_daily_uploads(
     missing). Raises ValueError only for a missing/simulated long
     video ID.
     """
-    if not long_yt_video_id or str(long_yt_video_id).startswith(("yt_sim_", "yt_priv_")):
+    if not long_yt_video_id or _is_simulated_video_id(long_yt_video_id):
         raise ValueError(
             f"Refusing to cross-link simulated video ID '{long_yt_video_id}'."
         )
@@ -575,6 +588,7 @@ class UploaderAgent:
         cost_usd: float = 0.0,
         bundle: Optional[Any] = None,
         long_video: Optional[Any] = None,
+        related: Optional[List[Dict[str, Any]]] = None,
     ) -> UploadResult:
         """Upload one vertical Short privately and register it separately.
 
@@ -584,8 +598,15 @@ class UploaderAgent:
         day's long video as ``{"title", "yt_video_id", "yt_url"}`` (or
         a bare YouTube video ID string) — when given, the Short's
         description gets a "Watch next" block linking the long video,
-        so each Short points at the full breakdown. A linking failure
-        never fails the upload (plain SEO description is used).
+        so each Short points at the full breakdown. ``related``:
+        previous channel videos as ``{"title", "yt_video_id",
+        "yt_url"}`` — when given they are appended to the "Watch
+        next" block after the long video (same previous-videos block
+        the long video gets); when None and ``bundle`` is given they
+        are read best-effort from the yt_videos Sheet tab. Simulated
+        / placeholder IDs (``yt_sim_*`` / ``yt_priv_*``) are dropped,
+        never linked. A linking failure never fails the upload (plain
+        SEO description is used).
 
         Separate path from :meth:`upload_and_register`:
 
@@ -662,13 +683,17 @@ class UploaderAgent:
 
         # 1. YouTube API private Short upload (#Shorts SEO).
         # Internal linking: the Short's description links the same
-        # day's long video (when known) and cites the bundle's real
-        # sources. shorts_seo() prepends "#Shorts" afterwards.
+        # day's long video (when known), the previous channel videos
+        # (same "Watch next" block the long video gets), and cites
+        # the bundle's real sources. shorts_seo() prepends "#Shorts"
+        # afterwards.
         linked_description = short_script.seo.description
         try:
             watch_next: List[Dict[str, Any]] = []
+            long_video_id: Optional[str] = None
             if long_video is not None:
                 if isinstance(long_video, str):
+                    long_video_id = long_video
                     watch_next.append(
                         {
                             "title": "Full breakdown — watch the long video",
@@ -679,6 +704,7 @@ class UploaderAgent:
                 else:
                     vid = long_video.get("yt_video_id")
                     if vid:
+                        long_video_id = vid
                         watch_next.append(
                             {
                                 "title": str(
@@ -690,6 +716,39 @@ class UploaderAgent:
                                 or f"https://youtu.be/{vid}",
                             }
                         )
+            # Previous channel videos: explicit `related` wins; when
+            # None and a bundle is given, read best-effort from the
+            # yt_videos Sheet tab (same as the long video's upload).
+            # A Sheets failure leaves the long-video link only — it
+            # never fails the upload.
+            related_entries = list(related) if related is not None else None
+            if related_entries is None and bundle is not None:
+                try:
+                    related_entries = get_related_videos(
+                        topic=parent_topic,
+                        pillar=getattr(bundle, "pillar", None),
+                        limit=5,
+                        exclude_yt_video_ids=(
+                            [long_video_id] if long_video_id else []
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001 — Sheets outage
+                    logger.warning(
+                        "Related-videos lookup failed for Short "
+                        f"({exc}); linking only the long video."
+                    )
+                    related_entries = []
+            for entry in related_entries or []:
+                # Simulated / placeholder IDs are dropped, never
+                # linked (same refusal as the long path).
+                if _is_simulated_video_id(entry.get("yt_video_id")):
+                    continue
+                watch_next.append(entry)
+            watch_next = [
+                entry
+                for entry in watch_next
+                if not _is_simulated_video_id(entry.get("yt_video_id"))
+            ]
             linked_description = build_video_description(
                 short_script.seo.description,
                 watch_next=watch_next,
@@ -803,6 +862,7 @@ def run_upload_short(
     cost_usd: float = 0.0,
     bundle: Optional[Any] = None,
     long_video: Optional[Any] = None,
+    related: Optional[List[Dict[str, Any]]] = None,
 ) -> UploadResult:
     """Convenience functional interface for Shorts uploading/registration.
 
@@ -811,9 +871,11 @@ def run_upload_short(
     ShortsScript validation (see UploaderAgent.upload_short_and_register).
     ``bundle`` adds the Sources block; ``long_video`` (``{"title",
     "yt_video_id", ...}`` or a bare video ID) adds the "Watch next"
-    link to the same day's long video.
+    link to the same day's long video; ``related`` adds the previous
+    channel videos to that block (when None and a bundle is given
+    they are read best-effort from the yt_videos Sheet tab).
     """
     return UploaderAgent().upload_short_and_register(
         video_path, thumb_path, short_script, parent_topic, short_index, cost_usd,
-        bundle=bundle, long_video=long_video,
+        bundle=bundle, long_video=long_video, related=related,
     )
