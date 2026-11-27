@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-11-27T04:37:32.314779+00:00",
+  "generated_at_utc": "2026-11-27T05:55:25.387322+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
@@ -15,7 +15,7 @@
       "rows": []
     },
     "yt_pipeline_runs": {
-      "count": 10,
+      "count": 12,
       "rows": [
         {
           "run_id": "run_850f5966",
@@ -176,6 +176,38 @@
             "shorts_video_ids": [],
             "cross_linked": false
           }
+        },
+        {
+          "run_id": "run_001bf9e9",
+          "started_at": "1795755830",
+          "ttl": "1803531830",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "failed",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
+        },
+        {
+          "run_id": "run_35a397c3",
+          "started_at": "1795755990",
+          "ttl": "1803531990",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "failed",
+            "shorts_uploaded": 0,
+            "shorts_video_ids": [],
+            "cross_linked": false
+          }
         }
       ]
     },
@@ -188,13 +220,13 @@
       "rows": []
     },
     "yt_topics_queue": {
-      "count": 61,
+      "count": 62,
       "rows": [
         {
           "topic_id": "top_093c6fb1",
           "topic": "GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
           "pillar": "ai_everything",
-          "status": "pending",
+          "status": "running",
           "priority": "10",
           "added_at": "1795697836"
         },
@@ -674,9 +706,17 @@
           "topic_id": "top_7cad3a11",
           "topic": "AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
           "pillar": "ai_everything",
-          "status": "pending",
+          "status": "running",
           "priority": "11",
           "added_at": "1795701894"
+        },
+        {
+          "topic_id": "top_2cd5a0a9",
+          "topic": "Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It.",
+          "pillar": "ai_everything",
+          "status": "pending",
+          "priority": "2",
+          "added_at": "1795755785"
         }
       ]
     },
@@ -685,7 +725,7 @@
       "rows": []
     },
     "yt_trends": {
-      "count": 1,
+      "count": 3,
       "rows": [
         {
           "topic_hash": "3ed233e0751d73ae1bed4fea18f16b0f",
@@ -693,10 +733,10 @@
           "pillar": "ai_everything",
           "angles_json": [
             "Trending now: The choices we make about AI now are critical | Bill Gates - Gates Notes — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
-            "Trending now: Top Fed official warns AI bots could pull money out of banks faster than regulators can step in. Keep your savings safe - Yahoo Finance — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
             "Trending now: Take a Cybercab to Elon's $320 Trillion Wealth Prediction - MarketWise — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
-            "Trending now: What if a few AI companies end up with all the money and power? - Noahpinion — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
-            "Trending now: McKinsey Technology Trends Outlook 2026 - McKinsey & Company — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter"
+            "Trending now: Workforce in motion: Skills and pathways to future jobs in the United States - McKinsey & Company — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "Trending now: Not even robots can make Universal Basic Income work - GIS Reports — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter",
+            "Trending now: He’s Letting AI Agents Invest His Money. They Even Have Names. - WSJ — what it means for AI, Robots and the Biggest Wealth Shift in History — Money Will Barely Matter"
           ],
           "sources_json": [
             "google_news",
@@ -704,7 +744,44 @@
             "techmeme",
             "bing_news"
           ],
-          "fetched_at": "1795722818"
+          "fetched_at": "1795755793"
+        },
+        {
+          "topic_hash": "f7596d78e5f7be74b24cf69bed5e379f",
+          "topic": "Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It.",
+          "pillar": "ai_everything",
+          "angles_json": [
+            "Trending now: Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It. - The Motley Fool — what it means for Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It.",
+            "Trending now: Pentagon Hand Caroline Zier Now Leads OpenAI's Limits on Military Artificial Intelligence - Broadband Breakfast — what it means for Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It.",
+            "Trending now: OpenAI says it corrected a GPT-6.2 Astra and Sol launch billing mistake that had incorrectly discounted usage; Astra users will now hit their limits 40% faster (Graham Barlow/TechRadar) — what it means for Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It.",
+            "Trending now: Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It. — what it means for Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It.",
+            "Trending now: Artificial Intelligence and Human Rights: Protecting Human Dignity in the Age of AI - UNESCO — what it means for Not Nvidia. Not Micron. If I Could Buy and Hold Only 1 Artificial Intelligence (AI) Semiconductor Stock Through 2030, This Would Be It."
+          ],
+          "sources_json": [
+            "bing_news",
+            "google_news",
+            "techmeme"
+          ],
+          "fetched_at": "1795755784"
+        },
+        {
+          "topic_hash": "acf0fdbfd701949eb2c6c7cde7ae705d",
+          "topic": "GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
+          "pillar": "ai_everything",
+          "angles_json": [
+            "Trending now: OpenAI has released a guide to prompting and configuring the API for GPT-6.2 Astra and Sol models. What's changed for developers - dev.ua — what it means for GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
+            "Trending now: OpenAI Launches GPT-6.2 Astra and Sol, Its First Public Model Rated High for Self-Improvement - Technology Org — what it means for GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
+            "Trending now: 'Essentially unusable': OpenAI launches GPT-6.2 Astra and Sol to negative reception from AI power users - VentureBeat — what it means for GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
+            "Trending now: OpenAI Releases GPT‑6.2 Astra and Sol With a Lower Price for Its Flagship - Kingy AI — what it means for GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained",
+            "Trending now: OpenAI’s new GPT-6.1 Sol undercuts its own Astra flagship - The New Stack — what it means for GPT-6.2 Astra vs Sol: OpenAI's New Flagship Explained"
+          ],
+          "sources_json": [
+            "google_news",
+            "hacker_news",
+            "techmeme",
+            "bing_news"
+          ],
+          "fetched_at": "1795755849"
         }
       ]
     },
@@ -716,13 +793,14 @@
   "summary": {
     "videos_total": 0,
     "videos_by_status": {},
-    "queue_total": 61,
+    "queue_total": 62,
     "queue_by_status": {
-      "pending": 61
+      "running": 2,
+      "pending": 60
     },
     "pending_requests": 0,
     "requests_total": 0,
-    "pipeline_runs_total": 10,
+    "pipeline_runs_total": 12,
     "config_keys": [],
     "active_models": null
   }
