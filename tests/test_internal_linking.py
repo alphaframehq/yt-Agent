@@ -471,5 +471,138 @@ class TestShortUploadLinksLongVideo(unittest.TestCase):
         tmp.cleanup()
 
 
+class TestShortUploadLinksRelated(unittest.TestCase):
+    """Shorts get the previous-videos "Watch next" block (27 Nov 2026),
+    like the long video — not just the same-day long-video link."""
+
+    def _upload(self, related=None, related_lookup=None, long_video=None):
+        from agents.uploader import run_upload_short
+
+        captured = {}
+
+        def _fake_upload_short(video_path, thumb_path, seo_data):
+            captured["seo"] = dict(seo_data)
+            return "short999"
+
+        tmp = tempfile.TemporaryDirectory()
+        video_path = Path(tmp.name) / "short.mp4"
+        video_path.write_bytes(b"v" * 20000)
+        patchers = [
+            mock.patch("agents.uploader.upload_short", side_effect=_fake_upload_short),
+            mock.patch("agents.uploader.verify_video_exists", return_value=True),
+            mock.patch("agents.uploader._probe_duration_sec", return_value=30.0),
+            mock.patch("agents.uploader.save_short_record", return_value="short_abc"),
+            mock.patch("agents.uploader.purge_local_media", return_value=None),
+        ]
+        if related_lookup is not None:
+            patchers.append(
+                mock.patch(
+                    "agents.uploader.get_related_videos",
+                    side_effect=related_lookup,
+                )
+            )
+        for p in patchers:
+            p.start()
+        try:
+            result = run_upload_short(
+                str(video_path), None, _make_short_script(),
+                parent_topic="Tool X launches",
+                bundle=_make_ai_bundle(),
+                long_video=long_video,
+                related=related,
+            )
+        finally:
+            for p in patchers:
+                p.stop()
+            tmp.cleanup()
+        return result, captured["seo"]["description"]
+
+    def test_short_description_links_related_previous_videos(self):
+        _, desc = self._upload(
+            related=[{
+                "title": "Earlier video",
+                "yt_video_id": "earlier1",
+                "yt_url": "https://youtu.be/earlier1",
+            }],
+            long_video={
+                "title": "Tool X launches — full breakdown",
+                "yt_video_id": "long123",
+                "yt_url": "https://youtu.be/long123",
+            },
+        )
+        self.assertIn("Watch next:", desc)
+        self.assertIn(
+            "Tool X launches — full breakdown — https://youtu.be/long123", desc
+        )
+        self.assertIn("Earlier video — https://youtu.be/earlier1", desc)
+        # Same-day long video first, previous videos after it.
+        self.assertLess(
+            desc.index("https://youtu.be/long123"),
+            desc.index("https://youtu.be/earlier1"),
+        )
+
+    def test_short_description_drops_simulated_related_ids(self):
+        _, desc = self._upload(
+            related=[
+                {
+                    "title": "Fake dry-run video",
+                    "yt_video_id": "yt_sim_abc",
+                    "yt_url": "https://youtu.be/yt_sim_abc",
+                },
+                {
+                    "title": "Earlier video",
+                    "yt_video_id": "earlier1",
+                    "yt_url": "https://youtu.be/earlier1",
+                },
+            ],
+            long_video="long123",
+        )
+        self.assertNotIn("yt_sim_abc", desc)
+        self.assertIn("Earlier video — https://youtu.be/earlier1", desc)
+        self.assertIn("https://youtu.be/long123", desc)
+
+    def test_short_fetches_related_when_not_passed(self):
+        calls = []
+
+        def _lookup(**kwargs):
+            calls.append(kwargs)
+            return [{
+                "title": "Earlier video",
+                "yt_video_id": "earlier1",
+                "yt_url": "https://youtu.be/earlier1",
+            }]
+
+        _, desc = self._upload(
+            related=None, related_lookup=_lookup,
+            long_video={
+                "title": "Tool X launches — full breakdown",
+                "yt_video_id": "long123",
+                "yt_url": "https://youtu.be/long123",
+            },
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["topic"], "Tool X launches")
+        self.assertIn("long123", calls[0]["exclude_yt_video_ids"])
+        self.assertIn("Earlier video — https://youtu.be/earlier1", desc)
+
+    def test_short_related_lookup_failure_still_uploads(self):
+        def _boom(**kwargs):
+            raise RuntimeError("sheets down")
+
+        result, desc = self._upload(
+            related=None, related_lookup=_boom,
+            long_video={
+                "title": "Tool X launches — full breakdown",
+                "yt_video_id": "long123",
+                "yt_url": "https://youtu.be/long123",
+            },
+        )
+        self.assertEqual(result.yt_video_id, "short999")
+        # Long-video link survives a Sheets outage; no crash.
+        self.assertIn(
+            "Tool X launches — full breakdown — https://youtu.be/long123", desc
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
