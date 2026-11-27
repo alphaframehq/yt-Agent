@@ -48,6 +48,7 @@ _GITHUB_SECRETS_HINT: str = (
 _ENV_SECRET_NAMES: tuple[str, ...] = (
     "GEMINI_KEY",
     "GEMINI_KEY_POOL",
+    "BLUESMINDS_API_KEY",
     "OPENROUTER_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -260,9 +261,9 @@ def list_secrets() -> dict[str, str]:
 def test_secret(name: str) -> bool:
     """Run a lightweight connectivity / validity test for *name*.
 
-    Supported providers: ``GEMINI_KEY``, ``OPENROUTER_KEY``,
-    ``AWS_ACCESS_KEY_ID`` (STS), ``PIXABAY_KEY``, ``ELEVEN_LABS_KEY``,
-    ``TELEGRAM_BOT_TOKEN``.
+    Supported providers: ``GEMINI_KEY``, ``BLUESMINDS_API_KEY``,
+    ``OPENROUTER_KEY``, ``AWS_ACCESS_KEY_ID`` (STS), ``PIXABAY_KEY``,
+    ``ELEVEN_LABS_KEY``, ``TELEGRAM_BOT_TOKEN``.
 
     Args:
         name: Secret identifier to test.
@@ -282,6 +283,14 @@ def test_secret(name: str) -> bool:
             resp = httpx.get(
                 "https://generativelanguage.googleapis.com/v1beta/models",
                 params={"key": value},
+                timeout=10,
+            )
+            return resp.status_code == 200
+
+        if name == "BLUESMINDS_API_KEY":
+            resp = httpx.get(
+                "https://api.bluesminds.com/v1/models",
+                headers={"Authorization": f"Bearer {value}"},
                 timeout=10,
             )
             return resp.status_code == 200
