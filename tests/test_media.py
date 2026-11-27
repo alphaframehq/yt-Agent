@@ -11,6 +11,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # Add yt-agent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -83,11 +84,16 @@ class TestMediaPipeline(unittest.TestCase):
                 generate_chart_by_type(c_type, data=self.chart_data)
 
     def test_tts_audio_synthesis_fails_without_polly(self):
-        """Without AWS Polly credentials, TTS must raise instead of
-        returning a 1-second silence stub as success."""
+        """Without AWS Polly credentials AND with the Kokoro fallback
+        unavailable, TTS must raise instead of returning a 1-second
+        silence stub as success. (Kokoro is patched to fail here so
+        this stays a fast unit test — the real Kokoro fallback is
+        covered by tests/test_kokoro_tts.py.)"""
         from agents.tts import synthesize_scene_audio
         narration = "Welcome to TubePilot AI. We deconstruct fintech architecture and capital flows."
-        with self.assertRaises(Exception):
+        with patch("agents.tts.synthesize_speech_kokoro",
+                   side_effect=RuntimeError("Kokoro unavailable")), \
+             self.assertRaises(Exception):
             synthesize_scene_audio(narration)
 
     def test_visual_budget_tracker_enforcement(self):
@@ -104,8 +110,11 @@ class TestMediaPipeline(unittest.TestCase):
 
     def test_video_assembly_longform_fails_without_tts(self):
         """Assembly without working TTS must raise instead of writing an
-        empty placeholder MP4 as success."""
-        with self.assertRaises(Exception):
+        empty placeholder MP4 as success. (Kokoro is patched to fail
+        here so no real model is downloaded in CI.)"""
+        with patch("agents.tts.synthesize_speech_kokoro",
+                   side_effect=RuntimeError("Kokoro unavailable")), \
+             self.assertRaises(Exception):
             assemble_video(self.script, "test_render_longform.mp4", bundle_data=self.bundle)
 
     def test_video_assembly_without_bundle_data_raises(self):
