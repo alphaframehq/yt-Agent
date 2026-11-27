@@ -39,16 +39,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "verify_chain": [
         ["gemini", "gemini-3.8-flash"],
         ["gemini", "gemini-3.5-flash-lite"],
-        # 27 Nov 2026: third Gemini rung, verified free 26 Nov 2026
-        # against Google's pricing page (ai.google.dev/gemini-api/docs/
-        # pricing — "Free of charge" in + out). Cheapest free text
-        # model, on a different capacity pool from the 3.x Flash
-        # models, so it is the last in-family chance before leaving
-        # Gemini for OpenRouter when 3.8/3.5-flash are overloaded.
+        # 27 Nov 2026: "gemini-2.5-flash-lite" REMOVED from this chain —
+        # it returns HTTP 404 (retired) on the free tier; run #20 died
+        # on it in the Shorts fallback chain. Do NOT re-add it without
+        # a live 200 check.
         # NOTE: a verify_chain row stored in the Sheets yt_config tab
         # overrides this default — update that row too for the live
-        # run to pick the new rung up.
-        ["gemini", "gemini-2.5-flash-lite"],
+        # run to pick the removal up.
         ["openrouter", "openrouter/free"],
     ],
     "pillar_split": {
