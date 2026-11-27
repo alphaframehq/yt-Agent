@@ -20,6 +20,11 @@ providers accept the Polly-style names — tools/gemini_tts maps
 Joanna -> Kore, Matthew -> Charon, Kajal -> Aoede.
 
 Feeds accurate audio durations back into the scene timing model.
+
+Scene pacing (27 Nov 2026, runs #19/#20): tools/gemini_tts.py
+spaces successive real TTS API calls at least TTS_MIN_INTERVAL_SEC
+apart (default 21s) — this is what keeps one free-tier key under
+its per-minute quota; cache hits are never paced.
 """
 
 from __future__ import annotations
