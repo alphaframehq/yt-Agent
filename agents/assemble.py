@@ -9,9 +9,27 @@
 # destination name.
 # MOTION PASS (Phase 2, 26 Nov 2026): the P1 gaps noted below are now
 # implemented — Ken Burns zoom/pan on stills (_ken_burns_clip), chart
-# fade-in (CHART_FADEIN_SEC), dip transitions between scenes
-# (TRANSITION_SEC), and burned-in subtitles via a second FFmpeg pass
-# (_burn_subtitles, best-effort with a loud warning on failure).
+# fade-in (CHART_FADEIN_SEC), cross-dissolve transitions between
+# scenes (CROSSFADE_SEC), and burned-in subtitles via a second FFmpeg
+# pass (_burn_subtitles, best-effort with a loud warning on failure)
+# — subtitles now opt-in only (YT_BURN_SUBTITLES=1), Phase 3.
+# MOTION PASS (Phase 3, 28 Nov 2026 — Dev: "jo bol raha hai, usko
+# screen par visuals me samjhaye"): narration subtitles are OFF by
+# default for BOTH formats (opt-in only via YT_BURN_SUBTITLES=1, for
+# accessibility); scenes are explained, not just moved — a
+# narration-derived animated explainer visual (agents/explain.py:
+# chat bubbles / wallet + coins / count-up stat / comparison bars /
+# labelled diagram, Pillow + MoviePy make_frame) replaces a still
+# whenever the scene has no real stock video and no chart; Ken Burns
+# is stronger (1.30x) with a beat change mid-scene and vertical /
+# diagonal pans; scenes join with a true cross-dissolve (overlapping
+# CompositeVideoClip + crossfadein, audio re-timed to the shifted
+# scene starts); charts draw in left-to-right instead of fading in;
+# Shorts stat cards count up. Dip-to-black is gone.
+# "Motion" here means zooms/pans/transitions/animated charts and
+# explainer animation only — there is no real-motion presenter video
+# in this pipeline (AI video generation is region-blocked for this
+# account); never claim otherwise.
 # "Motion" here means zooms/pans/transitions/animated charts only —
 # there is no real-motion presenter video in this pipeline (AI video
 # generation is region-blocked for this account); never claim otherwise.
@@ -23,15 +41,21 @@ Combines:
 - Scene voiceover narration (AWS Polly Neural)
 - Ambient background music at volume 0.08
 - Burned-in subtitles (SRT via faster-whisper / FFmpeg subtitles filter)
+  — OPT-IN ONLY via YT_BURN_SUBTITLES=1 (accessibility); default OFF
+  for both formats, 28 Nov 2026
 - Supports both 16:9 Longform (1920x1080) and 9:16 Shorts (1080x1920)
 
-Motion (implemented 26 Nov 2026, Phase 2): every still image gets a
-deterministic Ken Burns zoom/pan (no static image sits still), chart
-scenes fade in over 0.8s, scenes are joined with dip-to-black
-transitions, and the generated SRT is burned in with FFmpeg's
-``subtitles`` filter in a second pass. If the subtitle burn fails
-(missing filter/font/ffmpeg), the render is still delivered WITHOUT
-burned subtitles and a clear warning is logged — the failure is never
+Motion (implemented 26 Nov 2026, Phase 2; reworked 28 Nov 2026,
+Phase 3): every still image gets a deterministic Ken Burns zoom/pan
+(no static image sits still), chart scenes draw in left-to-right,
+scenes join with a cross-dissolve, and explanatory animated visuals
+(agents/explain.py) illustrate what the voiceover is saying. The
+generated SRT is burned in ONLY when the caller opts in with
+``YT_BURN_SUBTITLES=1`` (accessibility); by default both formats
+ship WITHOUT burned narration subtitles — the voice speaks, the
+screen shows visuals. If the opt-in burn fails (missing
+filter/font/ffmpeg), the render is still delivered WITHOUT burned
+subtitles and a clear warning is logged — the failure is never
 silent, and ``VideoAssembler.subtitles_burned`` reports the truth.
 """
 
@@ -68,13 +92,24 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # a real render.
 MIN_RENDER_BYTES = 1024
 
-# --- Motion constants (Phase 2, 26 Nov 2026) -------------------------------
+# --- Motion constants (Phase 2, 26 Nov 2026; Phase 3, 28 Nov 2026) ---
 # Ken Burns: slow zoom between 1.0x and this factor over the scene.
-KEN_BURNS_MAX_ZOOM = 1.12
-# Dip-to-black transitions: fade out/in this long at each scene edge,
-# capped at 25% of the scene duration (see _transition_sec).
-TRANSITION_SEC = 0.5
-# Chart PNG overlays fade in over this long at the scene start.
+# Phase 3 raised it 1.12 -> 1.30: at 1.12x a 10s still barely moves
+# on a phone screen, and Dev judged the visuals "static". The zoom
+# now also reverses direction at two beat points inside the scene
+# (see _ken_burns_clip), so the eye sees a change mid-scene.
+KEN_BURNS_MAX_ZOOM = 1.30
+# Cross-dissolve between scenes: each scene after the first starts
+# this long BEFORE the previous one ends and crossfades in over it
+# (see _render_composition). Total video length is therefore
+# sum(scene durations) - CROSSFADE_SEC * (n_scenes - 1), and scene
+# starts (SRT, audio) shift by the same amount — see _generate_srt.
+CROSSFADE_SEC = 0.6
+# First scene only: a short fade-in from black at the very start.
+OPEN_FADE_SEC = 0.3
+# Chart PNG overlays draw in over the scene (left-to-right reveal,
+# _chart_build_clip); CHART_FADEIN_SEC is kept as the first-scene
+# fade-in floor for chart scenes so a chart never pops in hard.
 CHART_FADEIN_SEC = 0.8
 # Subtitle style burned in by FFmpeg (libass). DejaVu Sans ships with
 # most ffmpeg installs; if the filter/font is missing the burn is
@@ -109,11 +144,40 @@ def _demo_mode_enabled() -> bool:
     }
 
 
-def _transition_sec(duration: float) -> float:
-    """Dip-transition length for a scene: 0.5s, capped at 25% of the
-    scene so a very short scene never gets a transition longer than
-    itself (MoviePy errors on fadein/fadeout > duration)."""
-    return min(TRANSITION_SEC, max(0.1, duration * 0.25))
+def _scene_start(idx: int, durations: List[float]) -> float:
+    """Start time of scene ``idx`` in the cross-dissolved timeline:
+    the plain cumulative start minus one CROSSFADE_SEC overlap per
+    earlier scene boundary. Scene 0 always starts at 0."""
+    return max(0.0, sum(durations[:idx]) - CROSSFADE_SEC * idx)
+
+
+def _beat_zoom(p: float, zoom_in: bool) -> float:
+    """Zoom factor at progress ``p`` (0..1) of a scene, with a beat
+    change inside the scene: the zoom runs to its extreme at the
+    first third, pulls back part-way at the second third, then runs
+    to the extreme again — so a long scene visibly transforms twice
+    instead of drifting in one direction for its whole length."""
+    zoom = KEN_BURNS_MAX_ZOOM
+    if zoom_in:
+        points = [(0.0, 1.0), (1 / 3, zoom), (2 / 3, 1.0 + (zoom - 1.0) * 0.4), (1.0, zoom)]
+    else:
+        points = [(0.0, zoom), (1 / 3, 1.0), (2 / 3, 1.0 + (zoom - 1.0) * 0.6), (1.0, 1.0)]
+    for (p0, z0), (p1, z1) in zip(points, points[1:]):
+        if p <= p1:
+            f = 0.0 if p1 == p0 else (p - p0) / (p1 - p0)
+            return z0 + (z1 - z0) * f
+    return points[-1][1]
+
+
+def _beat_pan(p: float) -> float:
+    """Pan progress 0..1 at scene progress ``p``: ping-pong across
+    the scene's three beats (0 -> 1 -> 0 -> 1) so the pan direction
+    reverses twice, in sync with the zoom beats."""
+    if p < 1 / 3:
+        return p * 3
+    if p < 2 / 3:
+        return 1 - (p - 1 / 3) * 3
+    return (p - 2 / 3) * 3
 
 
 def _ken_burns_clip(
@@ -127,32 +191,35 @@ def _ken_burns_clip(
     """Still image with a deterministic Ken Burns zoom/pan.
 
     No extra API calls, no randomness: ``variant`` (the scene index)
-    picks one of four deterministic moves — zoom-in, zoom-out,
-    pan-left, pan-right — so the same script always renders the same
-    motion. Implemented as a time-varying MoviePy ``resize`` wrapped
-    in a fixed-size ``CompositeVideoClip`` (the composite crops the
-    oversized frame to the canvas), with a time-varying position for
-    the pan. Every still therefore moves for its whole duration; no
-    static image sits longer than a scene.
+    picks one of eight deterministic moves — zoom-in/out x pan
+    horizontal / vertical / diagonal, forward / backward — so the
+    same script always renders the same motion. Implemented as a
+    time-varying MoviePy ``resize`` wrapped in a fixed-size
+    ``CompositeVideoClip`` (the composite crops the oversized frame
+    to the canvas), with a time-varying position for the pan. Every
+    still therefore moves for its whole duration; no static image
+    sits longer than a scene.
+
+    Phase 3 (28 Nov 2026): the zoom range is 1.0–1.30x (was 1.12x),
+    and both zoom and pan reverse at two beat points inside the
+    scene (``_beat_zoom`` / ``_beat_pan``) — a long scene now visibly
+    transforms mid-scene instead of drifting one way throughout.
 
     ``cover`` (Shorts quality fix F2): when True the image is first
     scaled by ``max(width/iw, height/ih)`` so it COVER-fills the
     canvas — a landscape 1280x720 photo in a 1080x1920 Short no
     longer sits as a 37.5% strip over black. The Ken Burns zoom
-    (1.0–1.12x) is applied on top of the cover scale, and the pan
+    (1.0–1.30x) is applied on top of the cover scale, and the pan
     span is computed from the real scaled image size, so the frame
     stays full at every t. Charts pass ``cover=False``: their PNGs
     are 1800x900 (2:1) and cover-cropping would cut axis labels.
     """
     from moviepy.editor import CompositeVideoClip, ImageClip
 
-    zoom = KEN_BURNS_MAX_ZOOM
-    if variant % 2 == 0:  # zoom in: 1.0x -> 1.12x
-        def _zoom(t: float) -> float:
-            return 1.0 + (zoom - 1.0) * (t / duration)
-    else:  # zoom out: 1.12x -> 1.0x
-        def _zoom(t: float) -> float:
-            return zoom - (zoom - 1.0) * (t / duration)
+    zoom_in = variant % 2 == 0
+
+    def _zoom(t: float) -> float:
+        return _beat_zoom(t / duration if duration else 0.0, zoom_in)
 
     base = ImageClip(image_path).set_duration(duration)
     iw, ih = getattr(base, "size", (width, height)) or (width, height)
@@ -162,15 +229,24 @@ def _ken_burns_clip(
         return cover_scale * _zoom(t)
 
     zoomed = base.resize(_scale)
+    # Pan axis from the variant (8-move cycle): 0,1 horizontal;
+    # 2,3 vertical; 4-7 diagonal (both axes). Direction flips every
+    # two variants.
+    cycle = variant % 8
     pan_forward = (variant // 2) % 2 == 0
 
     def _pos(t: float) -> tuple:
         s = _scale(t)
         span_x = width - iw * s  # <= 0: how far the frame may travel
         span_y = height - ih * s
-        p = t / duration
-        x = span_x * p if pan_forward else span_x * (1 - p)
-        return (x, span_y / 2)
+        q = _beat_pan(t / duration if duration else 0.0)
+        if not pan_forward:
+            q = 1 - q
+        pan_x = cycle in (0, 1, 4, 5, 6, 7)
+        pan_y = cycle in (2, 3, 4, 5, 6, 7)
+        x = span_x * q if pan_x else span_x / 2
+        y = span_y * q if pan_y else span_y / 2
+        return (x, y)
 
     moving = zoomed.set_position(_pos)
     # Opaque background (bg_color=(0, 0, 0)), NOT the default
@@ -193,6 +269,113 @@ def _ken_burns_clip(
     return CompositeVideoClip(
         [moving], size=(width, height), bg_color=(0, 0, 0)
     ).set_duration(duration)
+
+
+def _subtitles_opted_in() -> bool:
+    """True only when the caller explicitly opts into burned-in
+    narration subtitles (accessibility). Default OFF for both
+    formats (Dev, 28 Nov 2026): the voice speaks, the screen shows
+    visuals — never the spoken words as text."""
+    return os.environ.get("YT_BURN_SUBTITLES", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _explainer_clip(narration: str, duration: float, width: int, height: int) -> Any:
+    """Animated explanatory visual for one narration (Phase 3).
+
+    Derives the visual beat from the narration (agents/explain.py)
+    and renders it as a MoviePy VideoClip whose frames are drawn by
+    Pillow at time ``t`` — chat bubbles sliding in, coins flying
+    into a wallet, a number counting up, comparison bars growing,
+    diagram boxes connecting. Raises when MoviePy's VideoClip is
+    unavailable (unit-test fakes) or the beat is ``generic`` — the
+    caller falls back to the Ken Burns still in both cases.
+    """
+    from moviepy.editor import VideoClip
+
+    from agents.explain import derive_visual_beat, draw_explainer_frame
+
+    beat = derive_visual_beat(narration)
+    if beat.get("kind") == "generic":
+        raise ValueError("no explanatory beat for this narration")
+    return VideoClip(
+        lambda t: draw_explainer_frame(t, beat, duration, width, height),
+        duration=duration,
+    )
+
+
+def _chart_build_clip(png_path: str, duration: float, width: int, height: int) -> Any:
+    """Chart PNG that BUILDS in left-to-right instead of fading in
+    (Phase 3). A teal pen line sweeps across while the chart is
+    revealed behind it, so a chart scene shows a drawing being made
+    rather than a static image appearing. Raises when MoviePy's
+    VideoClip is unavailable — the caller falls back to Ken Burns +
+    fade-in (the old chart treatment)."""
+    import numpy as np
+    from PIL import Image
+
+    from moviepy.editor import VideoClip
+
+    chart = Image.open(png_path).convert("RGB")
+    cw, ch = chart.size
+    scale = min(width / cw, height / ch)
+    nw, nh = max(1, int(round(cw * scale))), max(1, int(round(ch * scale)))
+    chart = chart.resize((nw, nh), Image.LANCZOS)
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    canvas[:] = (14, 17, 23)
+    ox, oy = (width - nw) // 2, (height - nh) // 2
+    canvas[oy:oy + nh, ox:ox + nw] = np.asarray(chart)
+    bg = np.zeros((height, width, 3), dtype=np.uint8)
+    bg[:] = (14, 17, 23)
+
+    def _frame(t: float):
+        p = max(0.0, min(1.0, t / duration if duration else 1.0))
+        # Ease-out reveal; the pen line sits at the reveal edge.
+        p = 1.0 - (1.0 - p) ** 2
+        reveal_x = int(ox + nw * p)
+        frame = bg.copy()
+        if reveal_x > ox:
+            frame[:, ox:reveal_x] = canvas[:, ox:reveal_x]
+        if 0 < p < 1:
+            x = max(ox, min(width - 3, reveal_x))
+            frame[:, x:x + 3] = (0, 212, 170)
+        return frame
+
+    return VideoClip(_frame, duration=duration)
+
+
+def _animated_stat_clip(
+    big: str, label: str, duration: float, width: int, height: int
+) -> Any:
+    """Stat card whose figure COUNTS UP 0 -> value over the scene
+    (Phase 3). Same card art as the static PNG, rendered per-frame
+    by Pillow with an explicit mask clip built from the alpha
+    channel. Returns None (caller falls back to the static card)
+    when the figure cannot count up (word figures like "Millions")
+    or MoviePy's VideoClip is unavailable (unit-test fakes)."""
+    try:
+        from moviepy.editor import VideoClip
+
+        from agents.explain import draw_stat_card_frame, parse_stat_number
+
+        if parse_stat_number(big) is None:
+            return None
+
+        def _rgb(t: float):
+            return draw_stat_card_frame(t, big, label, duration)[:, :, :3]
+
+        def _mask(t: float):
+            return draw_stat_card_frame(t, big, label, duration)[:, :, 3].astype(float) / 255.0
+
+        clip = VideoClip(_rgb, duration=duration)
+        mask = VideoClip(_mask, ismask=True, duration=duration)
+        return clip.set_mask(mask).set_position(("center", "center"))
+    except Exception:  # noqa: BLE001 — decoration: fall back to static card
+        return None
 
 
 def _escape_subtitles_path(path: str) -> str:
@@ -520,13 +703,16 @@ class VideoAssembler:
         output_filename: Optional[str] = None,
         bundle_data: Optional[Any] = None,
     ) -> str:
-        """Compose all scenes, attach audio, background music, burned subtitles, and render MP4.
+        """Compose all scenes, attach audio, background music, and render MP4.
 
-        Motion applied per scene: Ken Burns zoom/pan on stills, 0.8s
-        fade-in on chart scenes, dip-to-black transitions between
-        scenes. Subtitles are burned in a second FFmpeg pass when
-        possible; if the burn fails, the render is still returned but
-        ``self.subtitles_burned`` stays False and a warning is logged.
+        Motion applied per scene: Ken Burns zoom/pan on stills (or an
+        animated explainer visual when the narration derives one),
+        chart draw-in on chart scenes, cross-dissolve transitions
+        between scenes. Subtitles are burned ONLY when the caller
+        opted in with YT_BURN_SUBTITLES=1; by default the render has
+        no burned narration text at all. If the burn fails, the render
+        is still returned but ``self.subtitles_burned`` stays False
+        and a warning is logged.
 
         bundle_data: a ResearchBundle, or a chart-data dict as built by
         research_bundle_to_chart_data(). Chart scenes REQUIRE it — if it
@@ -553,17 +739,22 @@ class VideoAssembler:
         bg_tracks = search_background_music()
         bg_music_path = download_media(bg_tracks[0]["url"], extension="mp3") if bg_tracks else None
 
-        # 4. Subtitles: NEVER for Shorts (Dev, 27 Nov 2026) — do not
-        # write on screen what the voiceover is saying. Shorts show
-        # visuals + stat cards + a hook title instead (see
-        # _extract_stat / _render_hook_overlay). Long video keeps its
-        # SRT subtitles, burned in after the render.
-        srt_path = None if self.is_shorts else self._generate_srt(audio_assets, script)
+        # 4. Subtitles: OFF by default for BOTH formats (Dev,
+        # 28 Nov 2026) — the voice speaks, the screen shows visuals,
+        # never the spoken words. Only an explicit YT_BURN_SUBTITLES=1
+        # (accessibility opt-in) generates + burns an SRT for the
+        # LONG video; Shorts never get narration subtitles.
+        srt_path = (
+            self._generate_srt(audio_assets, script)
+            if (not self.is_shorts and _subtitles_opted_in())
+            else None
+        )
         stat_texts = (
             [getattr(s, "narration", "") for s in script.scenes]
             if self.is_shorts
             else None
         )
+        narration_texts = [getattr(s, "narration", "") for s in script.scenes]
         hook_text = _hook_text(script) if self.is_shorts else ""
 
         # 5. Composite scenes via MoviePy / FFmpeg. Failures raise —
@@ -576,21 +767,27 @@ class VideoAssembler:
             srt_path,
             stat_texts=stat_texts,
             hook_text=hook_text,
+            narration_texts=narration_texts,
         )
 
     def _generate_srt(self, audio_assets: List[Dict[str, Any]], script: Any) -> Path:
-        """Generate time-aligned SRT subtitle file."""
+        """Generate time-aligned SRT subtitle file.
+
+        Timings are cross-dissolve aware: scene ``idx`` starts at
+        ``_scene_start(idx, durations)``, i.e. one CROSSFADE_SEC
+        earlier per earlier boundary, matching the rendered video.
+        Only used when subtitles are opted in (YT_BURN_SUBTITLES=1).
+        """
         srt_file = OUTPUT_DIR / "subtitles.srt"
-        current_sec = 0.0
+        durations = [asset["duration_sec"] for asset in audio_assets]
         lines = []
 
-        for idx, (asset, scene) in enumerate(zip(audio_assets, script.scenes), start=1):
+        for idx, (asset, scene) in enumerate(zip(audio_assets, script.scenes)):
             dur = asset["duration_sec"]
-            t_start = self._format_timestamp(current_sec)
-            t_end = self._format_timestamp(current_sec + dur)
-            current_sec += dur
-
-            lines.append(f"{idx}\n{t_start} --> {t_end}\n{scene.narration}\n")
+            start = _scene_start(idx, durations)
+            t_start = self._format_timestamp(start)
+            t_end = self._format_timestamp(start + dur)
+            lines.append(f"{idx + 1}\n{t_start} --> {t_end}\n{scene.narration}\n")
 
         srt_file.write_text("\n".join(lines), encoding="utf-8")
         return srt_file
@@ -612,19 +809,26 @@ class VideoAssembler:
         srt_path: Optional[Path],
         stat_texts: Optional[List[str]] = None,
         hook_text: str = "",
+        narration_texts: Optional[List[str]] = None,
     ) -> str:
         """Execute MoviePy / FFmpeg rendering pipeline.
 
-        Raises on any MoviePy/FFmpeg failure. Motion (Phase 2):
-        still images get a deterministic Ken Burns zoom/pan
-        (variant = scene index), chart scenes fade in over
-        CHART_FADEIN_SEC, and every scene gets a dip-to-black
-        transition (fadein/fadeout) so cuts are never hard. Dip
-        transitions are used instead of overlapping crossfades
-        deliberately: they keep total duration — and therefore the
-        SRT timings generated in step 4 — exact. After the render,
-        the SRT is burned in via a second FFmpeg pass
-        (:func:`_burn_subtitles`); if that burn fails, the render is
+        Raises on any MoviePy/FFmpeg failure. Motion (Phase 3, 28 Nov
+        2026): still images get a stronger deterministic Ken Burns
+        zoom/pan (1.0–1.30x, beat change mid-scene, variant = scene
+        index); chart scenes DRAW IN left-to-right; image scenes
+        whose narration derives an explanatory beat get an animated
+        explainer visual instead of the still (agents/explain.py);
+        scenes join with a true CROSS-DISSOLVE — each scene after
+        the first starts CROSSFADE_SEC before the previous ends and
+        crossfades in over it, so cuts are never hard and never dip
+        to black. Video and audio are built as separate tracks on
+        the same shifted timeline (scene ``idx`` starts at
+        ``_scene_start(idx, durations)``), so narration stays in
+        sync with its visuals and the total duration is
+        sum(durations) - CROSSFADE_SEC * (n - 1). After the render,
+        an SRT is burned in ONLY when one was passed (opt-in
+        YT_BURN_SUBTITLES=1); if that burn fails, the render is
         still delivered but ``self.subtitles_burned`` stays False and
         a warning is logged — never a silent claim of subtitles.
         Background music, if missing, is silently omitted (pre-existing
@@ -640,15 +844,28 @@ class VideoAssembler:
                 CompositeVideoClip,
                 ImageClip,
                 VideoFileClip,
-                concatenate_videoclips,
             )
 
             width, height = self.resolution
-            clips = []
+            durations = [a["duration_sec"] for a in audio_assets]
+            total_duration = (
+                sum(durations) - CROSSFADE_SEC * (len(durations) - 1)
+                if len(durations) > 1
+                else sum(durations)
+            )
+            video_clips = []
+            audio_clips = []
             for idx, (a_info, v_info) in enumerate(zip(audio_assets, visual_assets)):
                 dur = a_info["duration_sec"]
                 v_path = v_info["asset_path"]
                 is_chart = v_info.get("visual_type") == "chart"
+                start = _scene_start(idx, durations)
+                narration = (
+                    narration_texts[idx]
+                    if narration_texts and idx < len(narration_texts)
+                    else ""
+                )
+                explainer_used = False
 
                 if v_info["media_type"] == "video" and Path(v_path).exists():
                     # Cover-fill (F2): resize + center-crop to exactly
@@ -662,61 +879,91 @@ class VideoAssembler:
                         x_center=nw // 2, y_center=nh // 2,
                         width=width, height=height,
                     )
+                elif is_chart:
+                    # Chart scenes draw in left-to-right (Phase 3);
+                    # fall back to Ken Burns + fade-in when the
+                    # animated clip cannot be built (unit-test fakes).
+                    try:
+                        clip = _chart_build_clip(v_path, dur, width, height)
+                    except Exception:  # noqa: BLE001 — fallback below
+                        clip = _ken_burns_clip(v_path, dur, width, height, variant=idx)
                 else:
-                    # Still image: Ken Burns zoom/pan (deterministic
-                    # variant per scene) so it never sits static.
-                    # Cover-fills the canvas (F2).
-                    clip = _ken_burns_clip(v_path, dur, width, height, variant=idx)
+                    # Phase 3: explain the narration when we can —
+                    # an animated explainer visual (chat / wallet /
+                    # stat / comparison / diagram) replaces the still
+                    # whenever the scene has no real stock video and
+                    # no chart. Falls back to the Ken Burns still for
+                    # generic beats or when VideoClip is unavailable.
+                    try:
+                        clip = _explainer_clip(narration, dur, width, height)
+                        explainer_used = True
+                    except Exception:  # noqa: BLE001 — Ken Burns fallback
+                        clip = _ken_burns_clip(v_path, dur, width, height, variant=idx)
 
-                # Shorts stat card (new F1): one big figure + label
-                # per scene, centred over the visual. Never the
-                # narration text — Dev, 27 Nov 2026.
-                if self.is_shorts and stat_texts and idx < len(stat_texts):
+                # Shorts stat card (F1): one big figure + label per
+                # scene, centred over the visual — counting up when
+                # the figure is numeric (Phase 3). Never the
+                # narration text — Dev, 27 Nov 2026. Skipped when
+                # the explainer already carries the scene's figure
+                # (stat / wallet beats), so the number is not shown
+                # twice.
+                if self.is_shorts and stat_texts and idx < len(stat_texts) and not explainer_used:
                     big, label = _extract_stat(stat_texts[idx])
-                    stat_clip = _stat_card_clip(big, label, dur, width, height)
+                    stat_clip = _animated_stat_clip(big, label, dur, width, height)
+                    if stat_clip is None:
+                        stat_clip = _stat_card_clip(big, label, dur, width, height)
                     if stat_clip is not None:
                         clip = CompositeVideoClip(
                             [clip, stat_clip], size=(width, height)
                         ).set_duration(dur)
 
-                # Fade-in: chart scenes fade in over CHART_FADEIN_SEC
-                # (the chart overlay fade-in); other scenes fade in over
-                # the dip-transition length. A single fadein call only —
-                # stacking two fadeins corrupts the mask. Fade-out is
-                # always the dip-transition length.
-                t_sec = _transition_sec(dur)
-                fade_in = max(CHART_FADEIN_SEC, t_sec) if is_chart else t_sec
-                clip = clip.fadein(fade_in).fadeout(t_sec)
+                # Transitions: the first scene fades in from black
+                # (chart scenes over CHART_FADEIN_SEC, so a chart
+                # never pops in hard); every later scene
+                # cross-dissolves in over the previous one's tail.
+                # A single fadein/crossfadein call only — stacking
+                # two corrupts the mask.
+                if idx == 0:
+                    fade_in = max(CHART_FADEIN_SEC, OPEN_FADE_SEC) if is_chart else OPEN_FADE_SEC
+                    clip = clip.fadein(fade_in)
+                else:
+                    clip = clip.crossfadein(CROSSFADE_SEC)
+                clip = clip.set_start(start).set_duration(dur)
+                video_clips.append(clip)
 
-                # Attach scene voiceover audio, trimmed to the scene
-                # length. A file longer than dur would bleed past the
-                # scene (and, on the last scene, past the video, so
-                # the composed audio would outlast the video). A file
-                # a few ms shorter than dur (durations are rounded to
+                # Scene voiceover audio, trimmed to the scene length
+                # and placed at the same shifted start as its visual.
+                # A file longer than dur would bleed past the scene
+                # (and, on the last scene, past the video, so the
+                # composed audio would outlast the video). A file a
+                # few ms shorter than dur (durations are rounded to
                 # 2 decimals from the WAV frames) simply leaves
                 # silence in the tail gap — CompositeAudioClip skips
                 # clips that are not playing at a given time.
                 audio_clip = AudioFileClip(a_info["audio_path"])
                 if audio_clip.duration is not None and audio_clip.duration > dur:
                     audio_clip = audio_clip.subclip(0, dur)
-                clip = clip.set_audio(audio_clip)
-                clips.append(clip)
+                audio_clips.append(audio_clip.set_start(start))
 
-            final_video = concatenate_videoclips(clips, method="compose")
+            final_video = CompositeVideoClip(
+                video_clips, size=(width, height)
+            ).set_duration(total_duration)
 
-            # Add background music if present. The music track must
-            # never be stretched past its own length: set_duration()
-            # on a shorter file only changes the DECLARED duration,
-            # and MoviePy raises ("Accessing time t=... with clip
-            # duration=...") as soon as a whole requested audio chunk
-            # starts past the file end (run #23: the 147.226s Pixabay
-            # track vs a ~147.29s video). So a short track is looped
-            # to fill the video, a long one is trimmed, and the music
-            # always ends AUDIO_END_MARGIN_SEC before the video end.
-            # A degenerate (<= margin) video gets no music at all.
+            # Background music, mixed with the narration track. The
+            # music track must never be stretched past its own
+            # length: set_duration() on a shorter file only changes
+            # the DECLARED duration, and MoviePy raises ("Accessing
+            # time t=... with clip duration=...") as soon as a whole
+            # requested audio chunk starts past the file end (run
+            # #23: the 147.226s Pixabay track vs a ~147.29s video).
+            # So a short track is looped to fill the video, a long
+            # one is trimmed, and the music always ends
+            # AUDIO_END_MARGIN_SEC before the video end. A degenerate
+            # (<= margin) video gets no music at all.
+            music_clips = []
             if bg_music_path and Path(bg_music_path).exists():
                 bg_audio = AudioFileClip(bg_music_path).volumex(0.08)
-                music_target = final_video.duration - AUDIO_END_MARGIN_SEC
+                music_target = total_duration - AUDIO_END_MARGIN_SEC
                 if music_target > 0:
                     if bg_audio.duration is None:
                         # Unknown length: cannot loop or trim it
@@ -738,20 +985,22 @@ class VideoAssembler:
                             logger.info(
                                 f"Background music ({bg_audio.duration:.1f}s) "
                                 f"is shorter than the video "
-                                f"({final_video.duration:.1f}s); looping it "
+                                f"({total_duration:.1f}s); looping it "
                                 f"to {music_target:.1f}s."
                             )
                             bg_audio = audio_loop(bg_audio, duration=music_target)
                         else:
                             bg_audio = bg_audio.subclip(0, music_target)
-                        final_audio = CompositeAudioClip([final_video.audio, bg_audio])
-                        final_video = final_video.set_audio(final_audio)
+                        music_clips.append(bg_audio)
                 else:
                     logger.warning(
                         "Video is shorter than the audio safety margin "
                         f"({AUDIO_END_MARGIN_SEC}s); skipping background "
                         "music."
                     )
+            final_video = final_video.set_audio(
+                CompositeAudioClip(audio_clips + music_clips)
+            )
 
             # Hook title overlay (F4, Shorts only): the hook at the
             # top for the first 2 s, then it fades out. Pillow PNG —
@@ -806,11 +1055,13 @@ class VideoAssembler:
                     f"(missing or < {MIN_RENDER_BYTES} bytes)."
                 )
 
-            # Burn in subtitles (second FFmpeg pass) — long video
-            # only. Shorts never get narration subtitles (Dev,
-            # 27 Nov 2026): srt_path is None for Shorts. Best-effort:
-            # a failed burn keeps the good render, sets the flag False,
-            # and logs a warning — never a silent claim.
+            # Burn in subtitles (second FFmpeg pass) — ONLY when an
+            # SRT was passed, i.e. the YT_BURN_SUBTITLES=1 opt-in.
+            # Shorts never get narration subtitles (Dev, 27 Nov 2026)
+            # and the long video does not by default either (Dev,
+            # 28 Nov 2026): srt_path is None unless opted in.
+            # Best-effort: a failed burn keeps the good render, sets
+            # the flag False, and logs a warning — never a silent claim.
             if srt_path is not None:
                 self.subtitles_burned = _burn_subtitles(dest_path, srt_path)
                 if not self.subtitles_burned:
