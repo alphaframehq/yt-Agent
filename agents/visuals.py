@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import re
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -181,6 +182,35 @@ class VisualBudgetTracker(BaseModel):
         logger.info(f"Visual spend: +${cost:.2f} ({description}). Total: ${self.current_spend:.2f}/${self.max_budget:.2f}")
 
 
+# Words that carry no search meaning — dropped when deriving a
+# Pixabay keyword query from a prose visual prompt (F3). The query
+# is the first 2–4 remaining words, in order: "New York stock
+# exchange trading floor investors" -> "new york stock exchange".
+# The old behaviour (``prompt[:40]``) sent keyword soup like
+# "A cinematic wide shot of the New Yo…" to Pixabay.
+_QUERY_STOPWORDS = {
+    "a", "an", "the", "of", "in", "on", "at", "to", "for", "with",
+    "and", "or", "is", "are", "was", "were", "be", "been", "by",
+    "from", "as", "it", "its", "this", "that", "these", "those",
+    "cinematic", "wide", "shot", "close", "up", "view", "scene",
+    "footage", "video", "image", "photo", "showing", "shows",
+    "show", "over", "under", "into", "about", "dramatic",
+}
+
+
+def _stock_query(prompt: str) -> str:
+    """Derive a 2–4 keyword Pixabay query from a visual prompt.
+
+    Falls back to the raw prompt (truncated) when nothing meaningful
+    survives the stopword filter — never returns an empty query.
+    """
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9\-']*", str(prompt or ""))
+    keywords = [w for w in words if w.lower() not in _QUERY_STOPWORDS][:4]
+    if not keywords:
+        return (str(prompt or "stock")[:40] or "stock").strip()
+    return " ".join(keywords).lower()
+
+
 def _validate_asset(asset_path: Any, scene_id: Any) -> str:
     if not asset_path or not isinstance(asset_path, str):
         raise RuntimeError(f"Visual asset missing for scene {scene_id}: empty asset path.")
@@ -191,7 +221,7 @@ def _validate_asset(asset_path: Any, scene_id: Any) -> str:
 
 
 def _image_with_fallback(
-    prompt: str, scene_id: Any, *, allow_paid: bool = True
+    prompt: str, scene_id: Any, *, allow_paid: bool = True, is_shorts: bool = False
 ) -> tuple[str, float, str]:
     """Generate a scene image with the run #18 fallback chain.
 
@@ -220,8 +250,15 @@ def _image_with_fallback(
                 f"Imagen 3 failed for scene {scene_id} ({exc}); "
                 "falling back to Pixabay stock image."
             )
+    query = _stock_query(prompt)
+    logger.info(
+        f"Pixabay image query for scene {scene_id}: '{query}' "
+        f"(orientation={'vertical' if is_shorts else 'any'})"
+    )
     try:
-        images = search_stock_images(query=prompt[:40])
+        images = search_stock_images(
+            query=query, orientation="vertical" if is_shorts else None
+        )
     except Exception as exc:  # noqa: BLE001 — fall through to programmatic
         logger.warning(
             f"Pixabay image search failed for scene {scene_id} ({exc}); "
@@ -254,16 +291,21 @@ def _image_with_fallback(
         "programmatic title card visual."
     )
     prog_path = get_cached_image_path(prompt, "programmatic")
-    generate_programmatic_visual(prompt, prog_path)
+    generate_programmatic_visual(
+        prompt, prog_path, aspect_ratio="9:16" if is_shorts else "16:9"
+    )
     return _validate_asset(str(prog_path.resolve()), scene_id), 0.0, "programmatic"
 
 
 class VisualPipeline:
     """Routes visual prompts to appropriate rendering backends based on cost and scene type."""
 
-    def __init__(self, max_budget: Optional[float] = None):
+    def __init__(self, max_budget: Optional[float] = None, is_shorts: bool = False):
         budget_limit = max_budget if max_budget is not None else float(get_config("budget_ai_per_video") or 0.30)
         self.tracker = VisualBudgetTracker(max_budget=budget_limit)
+        # Shorts visuals must be vertical (9:16) and topic-relevant:
+        # Pixabay orientation + keyword query + 9:16 programmatic card.
+        self.is_shorts = is_shorts
 
     def resolve_scene(self, scene: SceneInfo, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Resolve a single scene's visual asset path, respecting type and remaining budget.
@@ -306,7 +348,14 @@ class VisualPipeline:
         elif v_type == "stock":
             videos = []
             try:
-                videos = search_stock_videos(query=prompt[:40])
+                query = _stock_query(prompt)
+                logger.info(
+                    f"Pixabay video query for scene {scene.id}: '{query}' "
+                    f"(orientation={'vertical' if self.is_shorts else 'any'})"
+                )
+                videos = search_stock_videos(
+                    query=query, orientation="vertical" if self.is_shorts else None
+                )
             except Exception as exc:  # noqa: BLE001 — no videos: fall through to image
                 # A missing PIXABAY_KEY raises in search_stock_videos;
                 # treat it as "no videos" instead of killing finalize.
@@ -327,6 +376,7 @@ class VisualPipeline:
                     asset_path, cost, _src = _image_with_fallback(
                         prompt, scene.id,
                         allow_paid=self.tracker.can_afford(0.03),
+                        is_shorts=self.is_shorts,
                     )
                     if cost:
                         self.tracker.record_spend(cost, f"Imagen 3 stock fallback scene {scene.id}")
@@ -341,6 +391,7 @@ class VisualPipeline:
                 asset_path, cost, _src = _image_with_fallback(
                     prompt, scene.id,
                     allow_paid=self.tracker.can_afford(0.03),
+                        is_shorts=self.is_shorts,
                 )
                 if cost:
                     self.tracker.record_spend(cost, f"Imagen 3 stock fallback scene {scene.id}")
@@ -358,6 +409,7 @@ class VisualPipeline:
                     asset_path, cost, _src = _image_with_fallback(
                         prompt, scene.id,
                         allow_paid=self.tracker.can_afford(0.03),
+                        is_shorts=self.is_shorts,
                     )
                     if cost:
                         self.tracker.record_spend(cost, f"Imagen 3 ai_gen fallback scene {scene.id}")
@@ -366,6 +418,7 @@ class VisualPipeline:
                 asset_path, cost, _src = _image_with_fallback(
                     prompt, scene.id,
                     allow_paid=self.tracker.can_afford(0.03),
+                        is_shorts=self.is_shorts,
                 )
                 if cost:
                     self.tracker.record_spend(cost, f"Imagen 3 ai_gen fallback scene {scene.id}")
@@ -373,7 +426,9 @@ class VisualPipeline:
         # 4. AI Image ($0.03 Imagen 3 / $0.01 FLUX)
         elif v_type == "ai_image":
             if self.tracker.can_afford(0.03):
-                asset_path, cost, _src = _image_with_fallback(prompt, scene.id)
+                asset_path, cost, _src = _image_with_fallback(
+                    prompt, scene.id, is_shorts=self.is_shorts
+                )
                 if cost:
                     self.tracker.record_spend(cost, f"Imagen 3 scene {scene.id}")
             else:
@@ -390,7 +445,8 @@ class VisualPipeline:
                         "falling back to free image chain."
                     )
                     asset_path, cost, _src = _image_with_fallback(
-                        prompt, scene.id, allow_paid=False
+                        prompt, scene.id, allow_paid=False,
+                        is_shorts=self.is_shorts,
                     )
 
         # 5. Diagram or Logo ($0.00 Programmatic or Imagen 3)
@@ -398,6 +454,7 @@ class VisualPipeline:
             asset_path, cost, _src = _image_with_fallback(
                 prompt, scene.id,
                 allow_paid=self.tracker.can_afford(0.03),
+                        is_shorts=self.is_shorts,
             )
             if cost:
                 # Previously this branch called Imagen but recorded
@@ -430,6 +487,14 @@ def resolve_scene_visuals(
     script: VideoScript,
     bundle_data: Optional[Dict[str, Any]] = None,
     budget: Optional[float] = None,
+    is_shorts: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Convenience functional interface for visual pipeline resolution."""
-    return VisualPipeline(max_budget=budget).resolve_all(script, bundle_data=bundle_data)
+    """Convenience functional interface for visual pipeline resolution.
+
+    ``is_shorts`` routes visuals to vertical, topic-relevant stock
+    (F3): Pixabay ``orientation="vertical"`` + keyword queries and a
+    9:16 programmatic card as the last resort.
+    """
+    return VisualPipeline(max_budget=budget, is_shorts=is_shorts).resolve_all(
+        script, bundle_data=bundle_data
+    )
