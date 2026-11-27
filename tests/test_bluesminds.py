@@ -111,13 +111,19 @@ class TestBluesmindsClient(unittest.TestCase):
             calls[0]["headers"]["Authorization"], f"Bearer {FAKE_KEY}"
         )
 
-    def test_default_model_is_kimi_k3(self):
-        self.assertEqual(BLUESMINDS_DEFAULT_MODEL, "moonshotai/kimi-k3")
+    def test_default_model_is_nemotron_lightning(self):
+        self.assertEqual(
+            BLUESMINDS_DEFAULT_MODEL, "nvidia/nemotron-3.5-lightning-30b-a3b"
+        )
         with patch.dict(os.environ, {}, clear=True):
             # No BLUESMINDS_MODEL set: the default applies.
-            self.assertEqual(get_bluesminds_model(), "moonshotai/kimi-k3")
+            self.assertEqual(
+                get_bluesminds_model(), "nvidia/nemotron-3.5-lightning-30b-a3b"
+            )
         _, calls, _ = self._run([_FakeResp(200, _chat_body("ok"))])
-        self.assertEqual(calls[0]["json"]["model"], "moonshotai/kimi-k3")
+        self.assertEqual(
+            calls[0]["json"]["model"], "nvidia/nemotron-3.5-lightning-30b-a3b"
+        )
 
     def test_env_model_override(self):
         _, calls, _ = self._run(
@@ -264,13 +270,13 @@ class TestBluesmindsProviderWiring(unittest.TestCase):
         with patch(
             "tools.llm_provider.call_bluesminds", return_value="structured text"
         ) as mock_call:
-            resp = LLMProvider("bluesminds", "moonshotai/kimi-k3").call(
-                "sys", "user"
-            )
+            resp = LLMProvider(
+                "bluesminds", "nvidia/nemotron-3.5-lightning-30b-a3b"
+            ).call("sys", "user")
         mock_call.assert_called_once()
         self.assertEqual(resp.content, "structured text")
         self.assertEqual(resp.provider, "bluesminds")
-        self.assertEqual(resp.model, "moonshotai/kimi-k3")
+        self.assertEqual(resp.model, "nvidia/nemotron-3.5-lightning-30b-a3b")
 
     def test_env_model_overrides_chain_model(self):
         with (
@@ -283,9 +289,9 @@ class TestBluesmindsProviderWiring(unittest.TestCase):
                 "tools.llm_provider.call_bluesminds", return_value="ok"
             ) as mock_call,
         ):
-            resp = LLMProvider("bluesminds", "moonshotai/kimi-k3").call(
-                "sys", "user"
-            )
+            resp = LLMProvider(
+                "bluesminds", "nvidia/nemotron-3.5-lightning-30b-a3b"
+            ).call("sys", "user")
         self.assertEqual(resp.model, "z-ai/glm-5.3-flash")
         self.assertEqual(mock_call.call_args.kwargs["model"], "z-ai/glm-5.3-flash")
 
@@ -298,9 +304,9 @@ class TestBluesmindsProviderWiring(unittest.TestCase):
             side_effect=BluesmindsError("Bluesminds HTTP 429"),
         ) as mock_call:
             with self.assertRaises(BluesmindsError):
-                LLMProvider("bluesminds", "moonshotai/kimi-k3").call(
-                    "sys", "user"
-                )
+                LLMProvider(
+                    "bluesminds", "nvidia/nemotron-3.5-lightning-30b-a3b"
+                ).call("sys", "user")
         self.assertEqual(mock_call.call_count, 1)
 
     def test_chain_order_gemini_then_bluesminds_then_openrouter(self):
@@ -310,7 +316,7 @@ class TestBluesmindsProviderWiring(unittest.TestCase):
             [
                 ["gemini", "gemini-3.8-flash"],
                 ["gemini", "gemini-3.5-flash-lite"],
-                ["bluesminds", "moonshotai/kimi-k3"],
+                ["bluesminds", "nvidia/nemotron-3.5-lightning-30b-a3b"],
                 ["openrouter", "openrouter/free"],
             ],
         )
@@ -332,7 +338,7 @@ class TestBluesmindsProviderWiring(unittest.TestCase):
             result = call_with_fallback(
                 [
                     ["gemini", "gemini-3.8-flash"],
-                    ["bluesminds", "moonshotai/kimi-k3"],
+                    ["bluesminds", "nvidia/nemotron-3.5-lightning-30b-a3b"],
                 ],
                 "sys",
                 "user",
