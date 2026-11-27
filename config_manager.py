@@ -51,7 +51,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # primary because it is free; Bluesminds is spent only when
         # the free tier is exhausted. Key: BLUESMINDS_API_KEY (GitHub
         # repo secret); model override: BLUESMINDS_MODEL env.
-        ["bluesminds", "moonshotai/kimi-k3"],
+        # Default model switched 27 Nov 2026: moonshotai/kimi-k3
+        # returns HTTP 410 (gone) on Bluesminds (run #24's log);
+        # nvidia/nemotron-3.5-lightning-30b-a3b was live-verified
+        # with a bundle-sized script prompt (HTTP 200, 3 scenes).
+        ["bluesminds", "nvidia/nemotron-3.5-lightning-30b-a3b"],
         ["openrouter", "openrouter/free"],
     ],
     "pillar_split": {
