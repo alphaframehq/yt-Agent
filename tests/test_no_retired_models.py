@@ -3,6 +3,10 @@ retired model — it returns HTTP 404 on the free tier and killed run
 #20 in the Shorts fallback chain. It must never reappear as a live
 model id in any fallback chain.
 
+(27 Nov 2026, run #24): moonshotai/kimi-k3 is retired on Bluesminds
+— it returns HTTP 410 (gone); the Shorts fallback chain fell through
+to OpenRouter. Same rule: it must never reappear as a live model id.
+
 Comments noting the removal are allowed; a live use is not. The
 TTS model "gemini-2.5-flash-preview-tts" is a different, live model
 and must NOT be flagged by this guard.
@@ -12,7 +16,7 @@ import unittest
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent
-_RETIRED = "gemini-2.5-flash-lite"
+_RETIRED = ("gemini-2.5-flash-lite", "moonshotai/kimi-k3")
 
 
 class TestNoRetiredModels(unittest.TestCase):
@@ -22,7 +26,8 @@ class TestNoRetiredModels(unittest.TestCase):
             FREE_TIER_TTS_MODELS,
         )
 
-        self.assertNotIn(_RETIRED, FREE_TIER_TEXT_MODELS)
+        for retired in _RETIRED:
+            self.assertNotIn(retired, FREE_TIER_TEXT_MODELS)
         # Guard must not overreach: the TTS preview model is live.
         self.assertIn("gemini-2.5-flash-preview-tts", FREE_TIER_TTS_MODELS)
 
@@ -30,10 +35,11 @@ class TestNoRetiredModels(unittest.TestCase):
         from config_manager import DEFAULT_CONFIG
 
         models = [m for _, m in DEFAULT_CONFIG.get("verify_chain", [])]
-        self.assertNotIn(_RETIRED, models)
+        for retired in _RETIRED:
+            self.assertNotIn(retired, models)
 
     def test_no_retired_model_id_in_code(self):
-        """No non-comment line in the pipeline code may name the
+        """No non-comment line in the pipeline code may name a
         retired model as a model id."""
         bad = []
         roots = [_ROOT / d for d in
@@ -44,8 +50,13 @@ class TestNoRetiredModels(unittest.TestCase):
             for i, line in enumerate(
                 path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1
             ):
-                if _RETIRED in line and not line.strip().startswith("#"):
-                    bad.append(f"{path.relative_to(_ROOT)}:{i}: {line.strip()[:120]}")
+                if line.strip().startswith("#"):
+                    continue
+                for retired in _RETIRED:
+                    if retired in line:
+                        bad.append(
+                            f"{path.relative_to(_ROOT)}:{i}: {line.strip()[:120]}"
+                        )
         self.assertEqual(bad, [])
 
 
