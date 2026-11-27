@@ -45,6 +45,11 @@ Features:
 - Gemini API key pool failover (same pool as tools/llm_provider.py:
   GEMINI_KEY, GEMINI_KEY_POOL, GEMINI_KEY_1..20) — a 429/quota
   failure cools that key down and tries the next healthy key.
+- Rate-limit resilience (27 Nov 2026, runs #19/#20): a 429's
+  Retry-After header is honoured (capped 60s), a failed scene is
+  retried up to 3 rounds across the pool, and successive real TTS
+  API calls are paced at least TTS_MIN_INTERVAL_SEC apart
+  (default 21s, env-overridable, 0 disables).
 - Deterministic audio caching in ./cache/audio/
 - Real audio duration measured from the written WAV frames.
 """
@@ -55,7 +60,10 @@ import base64
 import hashlib
 import os
 import re
+import time
 import wave
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -91,6 +99,27 @@ _DEFAULT_SAMPLE_RATE_HZ = 24_000
 # narrations; overlong input fails loudly from the API (400) rather
 # than being silently truncated here.
 _MAX_TEXT_CHARS = 8_000
+
+# TTS rate-limit resilience (27 Nov 2026 — runs #19/#20 root cause):
+# both runs died at Gemini TTS with HTTP 429 on a single-key pool
+# (key 1/1) and no fallback. Three defences, all in this module:
+# 1. Key pool: get_gemini_pool_keys() already supports a second key
+#    (GEMINI_KEY_2, plus GEMINI_KEY_POOL / GEMINI_KEY_1..20) — the
+#    second key MUST come from a different Google Cloud project (a
+#    new AI Studio project) to get a separate free-tier quota.
+# 2. Retry-After: a 429/5xx response's Retry-After header is honoured
+#    (capped at _RETRY_AFTER_MAX_WAIT_SEC) before the next attempt.
+# 3. Pacing: successive synthesize_speech calls are spaced at least
+#    TTS_MIN_INTERVAL_SEC apart (default 21s, env-overridable, 0 to
+#    disable — tests set 0). Cache hits are never paced.
+# A failed scene is retried up to _TTS_MAX_ATTEMPTS rounds across the
+# whole pool before raising. No key value is ever logged — only the
+# key index (1/N).
+_TTS_MAX_ATTEMPTS = 3
+_RETRY_AFTER_MAX_WAIT_SEC = 60.0
+_DEFAULT_MIN_INTERVAL_SEC = 21.0
+_last_tts_call_at: float = 0.0
+_sleep = time.sleep  # patchable in tests (tools.gemini_tts._sleep)
 
 CACHE_DIR = Path("cache/audio")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -152,6 +181,82 @@ def _parse_sample_rate(mime_type: str) -> int:
     if m:
         return int(m.group(1))
     return _DEFAULT_SAMPLE_RATE_HZ
+
+
+def _parse_retry_after_seconds(resp: object) -> float:
+    """Seconds to wait from a response's ``Retry-After`` header.
+
+    Accepts a delay in seconds (``"30"``) or an HTTP-date. Returns 0
+    when the header is absent, unparsable, or in the past. Capped at
+    ``_RETRY_AFTER_MAX_WAIT_SEC``. Defensive about mock/non-httpx
+    responses: only real str/int/float header values are accepted.
+    """
+    try:
+        headers = getattr(resp, "headers", None) or {}
+        raw = headers.get("Retry-After") if hasattr(headers, "get") else None
+    except Exception:
+        return 0.0
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        wait = float(raw)
+    elif isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return 0.0
+        try:
+            wait = float(raw)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(raw)
+            except (TypeError, ValueError):
+                return 0.0
+            if when is None:
+                return 0.0
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            wait = (when - datetime.now(timezone.utc)).total_seconds()
+    else:
+        return 0.0
+    if wait <= 0:
+        return 0.0
+    return min(wait, _RETRY_AFTER_MAX_WAIT_SEC)
+
+
+def _min_interval_sec() -> float:
+    """Configured pause between successive TTS API calls (seconds).
+
+    Env ``TTS_MIN_INTERVAL_SEC``, default 21.0. 0 disables pacing
+    (tests set 0); negative values are treated as 0.
+    """
+    try:
+        return max(0.0, float(os.environ.get(
+            "TTS_MIN_INTERVAL_SEC", str(_DEFAULT_MIN_INTERVAL_SEC)
+        ).strip()))
+    except (TypeError, ValueError):
+        return _DEFAULT_MIN_INTERVAL_SEC
+
+
+def _enforce_min_interval() -> None:
+    """Sleep so the previous real TTS API call is at least the
+    configured interval old. Called once per synthesize_speech call
+    (cache hits return before this), not per key attempt — failover
+    to the next key inside one call stays immediate.
+    """
+    global _last_tts_call_at
+    interval = _min_interval_sec()
+    if interval <= 0:
+        _last_tts_call_at = time.time()
+        return
+    now = time.time()
+    wait = interval - (now - _last_tts_call_at)
+    if wait > 0:
+        logger.info(
+            f"Gemini TTS pacing: waiting {wait:.1f}s before the next "
+            f"scene call (min interval {interval:.0f}s)."
+        )
+        _sleep(wait)
+    _last_tts_call_at = time.time()
 
 
 def _extract_pcm(data: dict) -> Tuple[bytes, int]:
@@ -260,71 +365,110 @@ def synthesize_speech(
     }
 
     last_err: Optional[Exception] = None
-    for idx, api_key in enumerate(keys):
-        # TO-VERIFY-LIVE: endpoint + model id (see module header).
-        url = f"{_API_BASE}/{model_id}:generateContent?key={api_key}"
-        try:
-            with httpx.Client(timeout=60.0) as client:
-                resp = client.post(
-                    url,
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
-                )
-            if resp.status_code in (429, 401, 403):
-                logger.warning(
-                    f"Gemini TTS key {idx + 1}/{len(keys)} failed with "
-                    f"HTTP {resp.status_code}; cooling it down and "
-                    "trying the next key in the pool."
-                )
+    retry_after_wait = 0.0
+    _enforce_min_interval()
+    # Up to _TTS_MAX_ATTEMPTS rounds over the whole pool (runs #19/#20:
+    # one 429 on the only key killed the scene). Between rounds we
+    # honour the largest Retry-After the server sent (capped at 60s),
+    # else a short 10s backoff. A 400 (bad request) or a safety
+    # refusal still raises immediately — retrying those is pointless.
+    for attempt in range(1, _TTS_MAX_ATTEMPTS + 1):
+        if attempt > 1:
+            wait = retry_after_wait if retry_after_wait > 0 else 10.0
+            logger.warning(
+                f"Gemini TTS attempt {attempt}/{_TTS_MAX_ATTEMPTS} "
+                f"after all keys failed; waiting {wait:.0f}s."
+            )
+            _sleep(wait)
+            retry_after_wait = 0.0
+        keys = get_gemini_pool_keys()
+        for idx, api_key in enumerate(keys):
+            # TO-VERIFY-LIVE: endpoint + model id (see module header).
+            url = f"{_API_BASE}/{model_id}:generateContent?key={api_key}"
+            try:
+                with httpx.Client(timeout=60.0) as client:
+                    resp = client.post(
+                        url,
+                        headers={"Content-Type": "application/json"},
+                        json=payload,
+                    )
+                if resp.status_code in (429, 401, 403):
+                    retry_after_wait = max(
+                        retry_after_wait, _parse_retry_after_seconds(resp)
+                    )
+                    logger.warning(
+                        f"Gemini TTS key {idx + 1}/{len(keys)} failed with "
+                        f"HTTP {resp.status_code}; cooling it down and "
+                        "trying the next key in the pool."
+                    )
+                    mark_gemini_key_failed(
+                        api_key, error_status=resp.status_code
+                    )
+                    last_err = RuntimeError(
+                        f"Gemini TTS request failed with HTTP "
+                        f"{resp.status_code} (key {idx + 1}/{len(keys)})."
+                    )
+                    continue
+                if resp.status_code in (500, 502, 503, 504):
+                    # Transient server error: same failover as 429,
+                    # honoured via Retry-After on the next round.
+                    retry_after_wait = max(
+                        retry_after_wait, _parse_retry_after_seconds(resp)
+                    )
+                    logger.warning(
+                        f"Gemini TTS key {idx + 1}/{len(keys)} hit HTTP "
+                        f"{resp.status_code} (server error); cooling it "
+                        "down and trying the next key in the pool."
+                    )
+                    mark_gemini_key_failed(
+                        api_key, error_status=resp.status_code
+                    )
+                    last_err = RuntimeError(
+                        f"Gemini TTS request failed with HTTP "
+                        f"{resp.status_code} (key {idx + 1}/{len(keys)})."
+                    )
+                    continue
+                if resp.status_code >= 400:
+                    # A 4xx that is not key failover (e.g. 400 bad
+                    # request) — fail loudly, do not burn the pool.
+                    raise RuntimeError(
+                        "Gemini TTS request failed with HTTP "
+                        f"{resp.status_code}: {resp.text[:500]}"
+                    )
+                pcm, sample_rate = _extract_pcm(resp.json())
+            except RuntimeError:
+                raise
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                logger.warning(f"Gemini TTS request failed ({exc}); trying next key.")
                 mark_gemini_key_failed(
-                    api_key, error_status=resp.status_code
+                    api_key,
+                    error_status=getattr(
+                        getattr(exc, "response", None), "status_code", 500
+                    ),
                 )
-                last_err = RuntimeError(
-                    f"Gemini TTS request failed with HTTP "
-                    f"{resp.status_code} (key {idx + 1}/{len(keys)})."
-                )
+                last_err = exc
                 continue
-            if resp.status_code >= 400:
-                # A 4xx/5xx that is not key failover (e.g. 400 bad
-                # request, 500) — fail loudly, do not burn the pool.
-                raise RuntimeError(
-                    "Gemini TTS request failed with HTTP "
-                    f"{resp.status_code}: {resp.text[:500]}"
-                )
-            pcm, sample_rate = _extract_pcm(resp.json())
-        except RuntimeError:
-            raise
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            logger.warning(f"Gemini TTS request failed ({exc}); trying next key.")
-            mark_gemini_key_failed(
-                api_key,
-                error_status=getattr(
-                    getattr(exc, "response", None), "status_code", 500
-                ),
-            )
-            last_err = exc
-            continue
 
-        try:
-            with wave.open(str(cache_path), "wb") as wav:
-                wav.setnchannels(1)
-                wav.setsampwidth(2)  # 16-bit PCM
-                wav.setframerate(sample_rate)
-                wav.writeframes(pcm)
-        except Exception as e:
-            raise RuntimeError(
-                f"Could not write Gemini TTS audio to {cache_path}: {e}"
-            ) from e
-        if cache_path.stat().st_size == 0:
-            raise RuntimeError(
-                f"Gemini TTS wrote an empty audio file to {cache_path}."
+            try:
+                with wave.open(str(cache_path), "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)  # 16-bit PCM
+                    wav.setframerate(sample_rate)
+                    wav.writeframes(pcm)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Could not write Gemini TTS audio to {cache_path}: {e}"
+                ) from e
+            if cache_path.stat().st_size == 0:
+                raise RuntimeError(
+                    f"Gemini TTS wrote an empty audio file to {cache_path}."
+                )
+            duration = _measure_wav_duration(cache_path)
+            logger.info(
+                f"Gemini TTS synthesized {len(clean_text)} chars "
+                f"(voice={gemini_voice}, {duration}s) -> {cache_path}"
             )
-        duration = _measure_wav_duration(cache_path)
-        logger.info(
-            f"Gemini TTS synthesized {len(clean_text)} chars "
-            f"(voice={gemini_voice}, {duration}s) -> {cache_path}"
-        )
-        return str(cache_path.resolve()), duration
+            return str(cache_path.resolve()), duration
 
     if last_err is not None:
         raise RuntimeError(
