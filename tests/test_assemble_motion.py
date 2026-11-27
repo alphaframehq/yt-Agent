@@ -60,6 +60,10 @@ class _FakeClip:
         self.duration = d
         return self
 
+    def set_start(self, t):
+        self.calls.append(("set_start", t))
+        return self
+
     def resize(self, fn):
         self.calls.append(("resize", fn))
         return self
@@ -89,17 +93,23 @@ class _FakeClip:
         self.calls.append(("subclip", a, b))
         return self
 
+    def crop(self, **kwargs):
+        self.calls.append(("crop", kwargs))
+        return self
+
     def write_videofile(self, path, **kwargs):
         self.calls.append(("write_videofile", path))
         Path(path).write_bytes(b"x" * 2048)
 
 
 class _FakeImageClip(_FakeClip):
-    pass
+    # Default still size; cover-fill tests override this per-test
+    # (a 1280x720 landscape still in a 1080x1920 Short).
+    size = (1920, 1080)
 
 
 class _FakeVideoClip(_FakeClip):
-    pass
+    size = (1280, 720)
 
 
 class _FakeAudioClip(_FakeClip):
@@ -259,6 +269,44 @@ class TestKenBurns(unittest.TestCase):
         self.assertEqual(_transition_sec(1.0), 0.25)
         self.assertEqual(_transition_sec(0.2), 0.1)
 
+    def test_cover_fill_landscape_photo_in_portrait_canvas(self):
+        """Shorts quality fix F2: a 1280x720 still in a 1080x1920
+        Short is cover-scaled (2.667x) so it fills the frame at
+        every t — never a strip over black."""
+        from agents.assemble import _ken_burns_clip
+
+        _FakeImageClip.size = (1280, 720)
+        try:
+            clip = _ken_burns_clip("/tmp/landscape.jpg", 8.0, 1080, 1920, variant=0)
+        finally:
+            _FakeImageClip.size = (1920, 1080)
+        image_clip = next(c for c in _FakeClip.registry if isinstance(c, _FakeImageClip))
+        (resize_fn,) = [c[1] for c in image_clip.calls if c[0] == "resize"]
+        self.assertAlmostEqual(resize_fn(0.0), 1920 / 720, places=4)
+        self.assertAlmostEqual(resize_fn(8.0), (1920 / 720) * 1.12, places=4)
+        composite = next(c for c in _FakeClip.registry if isinstance(c, _FakeCompositeClip))
+        self.assertEqual(composite.kwargs.get("size"), (1080, 1920))
+        (pos_fn,) = [c[1] for c in image_clip.calls if c[0] == "set_position"]
+        for t in (0.0, 4.0, 8.0):
+            s = resize_fn(t)
+            x, y = pos_fn(t)
+            self.assertLessEqual(x, 0)
+            self.assertGreaterEqual(x + 1280 * s, 1080)
+            self.assertLessEqual(y, 0)
+            self.assertGreaterEqual(y + 720 * s, 1920)
+        self.assertEqual(clip.duration, 8.0)
+
+    def test_cover_disabled_keeps_old_curve_for_charts(self):
+        """Charts pass cover=False: the old 1.0->1.12 curve is kept
+        so 2:1 chart PNGs are not cropped."""
+        from agents.assemble import _ken_burns_clip
+
+        _ken_burns_clip("/tmp/chart.png", 8.0, 1920, 1080, variant=0, cover=False)
+        image_clip = next(c for c in _FakeClip.registry if isinstance(c, _FakeImageClip))
+        (resize_fn,) = [c[1] for c in image_clip.calls if c[0] == "resize"]
+        self.assertAlmostEqual(resize_fn(0.0), 1.0)
+        self.assertAlmostEqual(resize_fn(8.0), 1.12)
+
 
 class TestRenderCompositionMotion(unittest.TestCase):
     def setUp(self):
@@ -325,16 +373,87 @@ class TestRenderCompositionMotion(unittest.TestCase):
         self.assertEqual(len(fadeins), 1)
         self.assertAlmostEqual(fadeins[0][1], CHART_FADEIN_SEC)
 
-    def test_video_scenes_get_transitions_but_no_ken_burns(self):
+    def test_video_scenes_are_cover_cropped_to_canvas(self):
+        """Shorts quality fix F2: a landscape stock clip is resized +
+        center-cropped to exactly the canvas (no 2:3 output), and
+        still gets its dip transition."""
         visuals = [
             {"asset_path": str(self.vid), "media_type": "video", "visual_type": "stock"},
         ]
         self._render(visuals, durations=(5.0,))
         video_clips = [c for c in _FakeClip.registry if isinstance(c, _FakeVideoClip)]
         self.assertEqual(len(video_clips), 1)
-        self.assertFalse(_calls_of(video_clips[0], "resize"))
+        resizes = _calls_of(video_clips[0], "resize")
+        self.assertEqual(len(resizes), 1)
+        # 1280x720 -> cover scale max(1920/1280, 1080/720) = 1.5.
+        self.assertEqual(resizes[0][1], (1920, 1080))
+        crops = _calls_of(video_clips[0], "crop")
+        self.assertEqual(len(crops), 1)
+        self.assertEqual(crops[0][1].get("width"), 1920)
+        self.assertEqual(crops[0][1].get("height"), 1080)
         self.assertTrue(_calls_of(video_clips[0], "fadein"))
         self.assertTrue(_calls_of(video_clips[0], "fadeout"))
+
+    def test_shorts_render_has_stat_cards_and_no_subtitle_burn(self):
+        """Shorts quality fix (Dev, 27 Nov 2026): no narration
+        subtitles are burned for Shorts — srt_path is None — and
+        every scene gets a stat-card overlay composited on it."""
+        from agents.assemble import VideoAssembler
+
+        visuals = [
+            {"asset_path": str(self.img), "media_type": "image", "visual_type": "stock"},
+            {"asset_path": str(self.img), "media_type": "image", "visual_type": "stock"},
+        ]
+        assembler = VideoAssembler(is_shorts=True)
+        audio = [
+            {"duration_sec": 5.0, "audio_path": "/tmp/a.wav"},
+            {"duration_sec": 5.0, "audio_path": "/tmp/a.wav"},
+        ]
+        stat_texts = [
+            "Anthropic just secured over 81 billion dollars in the largest offering.",
+            "Investors rushed in because millions use Claude every day.",
+        ]
+        with mock.patch("agents.assemble.shutil.which", return_value=None):
+            out = assembler._render_composition(
+                self.dest, audio, visuals, None, None,
+                stat_texts=stat_texts, hook_text="Anthropic IPO: $81 Billion",
+            )
+        self.assertEqual(out, str(self.dest.resolve()))
+        self.assertFalse(assembler.subtitles_burned)
+        # Per scene: Ken Burns composite + stat-card composite, plus
+        # one hook composite at the end.
+        composites = [c for c in _FakeClip.registry if isinstance(c, _FakeCompositeClip)]
+        self.assertEqual(len(composites), 5)
+        # Stat cards and the hook are real ImageClips (Pillow PNGs).
+        image_clips = [c for c in _FakeClip.registry if isinstance(c, _FakeImageClip)]
+        self.assertEqual(len(image_clips), 5)
+
+    def test_final_size_mismatch_raises(self):
+        """F2 assert: a final video that is not exactly the canvas
+        raises instead of writing a wrong-size MP4."""
+        from agents.assemble import VideoAssembler
+
+        visuals = [
+            {"asset_path": str(self.img), "media_type": "image", "visual_type": "stock"},
+        ]
+        assembler = VideoAssembler(is_shorts=False)
+        audio = [{"duration_sec": 5.0, "audio_path": "/tmp/a.wav"}]
+        wrong_size = _FakeClip()
+        wrong_size.size = (1280, 1920)
+        wrong_size.duration = 5.0
+        # concatenate_videoclips is imported inside
+        # _render_composition from the (fake) moviepy.editor module,
+        # so patch it there.
+        import moviepy.editor as _ed
+
+        with mock.patch("agents.assemble.shutil.which", return_value=None), mock.patch.object(
+            _ed, "concatenate_videoclips", return_value=wrong_size
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                assembler._render_composition(
+                    self.dest, audio, visuals, None, self.srt
+                )
+        self.assertIn("size mismatch", str(ctx.exception))
 
 
 class TestSubtitleBurn(unittest.TestCase):
