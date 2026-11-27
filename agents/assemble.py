@@ -37,8 +37,10 @@ silent, and ``VideoAssembler.subtitles_burned`` reports the truth.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -120,6 +122,7 @@ def _ken_burns_clip(
     width: int = 1920,
     height: int = 1080,
     variant: int = 0,
+    cover: bool = True,
 ) -> Any:
     """Still image with a deterministic Ken Burns zoom/pan.
 
@@ -131,30 +134,65 @@ def _ken_burns_clip(
     oversized frame to the canvas), with a time-varying position for
     the pan. Every still therefore moves for its whole duration; no
     static image sits longer than a scene.
+
+    ``cover`` (Shorts quality fix F2): when True the image is first
+    scaled by ``max(width/iw, height/ih)`` so it COVER-fills the
+    canvas — a landscape 1280x720 photo in a 1080x1920 Short no
+    longer sits as a 37.5% strip over black. The Ken Burns zoom
+    (1.0–1.12x) is applied on top of the cover scale, and the pan
+    span is computed from the real scaled image size, so the frame
+    stays full at every t. Charts pass ``cover=False``: their PNGs
+    are 1800x900 (2:1) and cover-cropping would cut axis labels.
     """
     from moviepy.editor import CompositeVideoClip, ImageClip
 
     zoom = KEN_BURNS_MAX_ZOOM
     if variant % 2 == 0:  # zoom in: 1.0x -> 1.12x
-        def _scale(t: float) -> float:
+        def _zoom(t: float) -> float:
             return 1.0 + (zoom - 1.0) * (t / duration)
     else:  # zoom out: 1.12x -> 1.0x
-        def _scale(t: float) -> float:
+        def _zoom(t: float) -> float:
             return zoom - (zoom - 1.0) * (t / duration)
 
-    zoomed = ImageClip(image_path).set_duration(duration).resize(_scale)
+    base = ImageClip(image_path).set_duration(duration)
+    iw, ih = getattr(base, "size", (width, height)) or (width, height)
+    cover_scale = max(width / iw, height / ih) if cover and iw and ih else 1.0
+
+    def _scale(t: float) -> float:
+        return cover_scale * _zoom(t)
+
+    zoomed = base.resize(_scale)
     pan_forward = (variant // 2) % 2 == 0
 
     def _pos(t: float) -> tuple:
         s = _scale(t)
-        span_x = width - width * s  # <= 0: how far the frame may travel
-        span_y = height - height * s
+        span_x = width - iw * s  # <= 0: how far the frame may travel
+        span_y = height - ih * s
         p = t / duration
         x = span_x * p if pan_forward else span_x * (1 - p)
         return (x, span_y / 2)
 
     moving = zoomed.set_position(_pos)
-    return CompositeVideoClip([moving], size=(width, height)).set_duration(duration)
+    # Opaque background (bg_color=(0, 0, 0)), NOT the default
+    # transparent composite. MoviePy 1.0.3 builds a mask for a
+    # transparent CompositeVideoClip from each child's mask, and a
+    # child with no mask gets add_mask() — whose mask is a static
+    # all-ones array of the clip's .size (evaluated once, at t=0).
+    # But this clip's frame GROWS with the time-varying zoom, so on
+    # zoom-in variants the frozen mask ends up shorter than the
+    # frame and, because _pos centres the growing image by moving
+    # it up (y = span_y/2 < 0), the mask leaves an uncovered black
+    # strip at the bottom that grows with t (measured in the v2
+    # sample: 6 rows at t=0.5s -> 108 rows at t=8.5s). The strip
+    # only shows once an outer transparent composite applies the
+    # mask — i.e. as soon as the Shorts stat card is composited
+    # over the scene. With an opaque background the clip has no
+    # mask at all, so outer composites fall back to a full-canvas
+    # all-ones mask and the frames stay full. The background never
+    # shows: the image cover-fills the canvas at every t.
+    return CompositeVideoClip(
+        [moving], size=(width, height), bg_color=(0, 0, 0)
+    ).set_duration(duration)
 
 
 def _escape_subtitles_path(path: str) -> str:
@@ -167,6 +205,229 @@ def _escape_subtitles_path(path: str) -> str:
     return (
         path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     )
+
+
+# --- Shorts on-screen text (Dev, 27 Nov 2026) -------------------------
+# NEVER write the narration on screen for Shorts ("jo bol rha usko
+# likhna nhi") — no narration subtitles at all. What the voice says
+# is shown as VISUALS + STATS: one big stat/number card per scene
+# plus a hook title for the first 2 s. All overlays are rendered
+# with Pillow (no TextClip — ImageMagick is absent on the runner).
+_STAT_NUMBER_RE = re.compile(
+    r"\$?\s?(\d+(?:\.\d+)?)\s*(billion|million|trillion)\b", re.IGNORECASE
+)
+_STAT_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+_STAT_WORD_RE = re.compile(r"\b(millions?|billions?|trillions?)\b", re.IGNORECASE)
+_STAT_STOPWORDS = {
+    "a", "an", "the", "of", "in", "on", "at", "to", "for", "with",
+    "and", "or", "but", "is", "are", "was", "were", "be", "been",
+    "by", "from", "as", "it", "its", "this", "that", "these", "those",
+    "can", "could", "will", "would", "just", "now", "over", "into",
+    "before", "after", "remains", "remain", "officially", "making",
+}
+_STAT_ACRONYMS = {"ai": "AI", "ipo": "IPO", "usd": "USD", "ceo": "CEO"}
+
+
+def _titlecase_stat(text: str) -> str:
+    """Title-case a stat label, keeping known acronyms upper-case."""
+    return " ".join(
+        _STAT_ACRONYMS.get(w.lower(), w.capitalize()) for w in text.split()
+    )
+
+
+def _content_words(text: str) -> list:
+    """Words carrying meaning — stopwords dropped, order kept."""
+    return [
+        w for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", str(text or ""))
+        if w.lower() not in _STAT_STOPWORDS
+    ]
+
+
+def _extract_stat(narration: str) -> tuple:
+    """Extract one (big, label) stat from a scene narration.
+
+    Big is the key figure: ``$81B`` / ``42%`` / ``Millions``.
+    Label is a 2–4 word caption from the same scene (the clause
+    after the figure, else the words after it). With no figure at
+    all the first two content words become the big text
+    (e.g. ``BIG QUESTION``) and the next four the label. Never
+    returns empty strings — a scene always gets a stat card.
+    """
+    text = str(narration or "").strip()
+    if not text:
+        return ("KEY FACT", "What Matters")
+
+    def _label_after(match, pattern_text: str) -> str:
+        clauses = [c for c in re.split(r"[,.!?;:]", text) if c.strip()]
+        idx = next(
+            (i for i, c in enumerate(clauses) if pattern_text in c), 0
+        )
+        words: list = []
+        if idx + 1 < len(clauses):
+            words = _content_words(clauses[idx + 1])
+        if len(words) < 2:
+            words = _content_words(text[match.end():]) or _content_words(
+                clauses[idx]
+            )
+        return _titlecase_stat(" ".join(words[:4])) or "Key Figure"
+
+    m = _STAT_NUMBER_RE.search(text)
+    if m:
+        num = m.group(1)
+        suffix = {"billion": "B", "million": "M", "trillion": "T"}.get(
+            (m.group(2) or "").lower(), ""
+        )
+        return (f"${num}{suffix}", _label_after(m, m.group(0)))
+    m = _STAT_PCT_RE.search(text)
+    if m:
+        return (f"{m.group(1)}%", _label_after(m, m.group(0)))
+    m = _STAT_WORD_RE.search(text)
+    if m:
+        return (m.group(1).capitalize(), _label_after(m, m.group(1)))
+    words = _content_words(text)
+    big = " ".join(words[:2]).upper() or "KEY FACT"
+    label = _titlecase_stat(" ".join(words[2:6])) or "What Matters"
+    return (big, label)
+
+
+def _render_stat_card(big: str, label: str, dest_path: Path) -> Path:
+    """Render one stat card as a transparent PNG (920x480).
+
+    Big figure ~150 px bold, label ~46 px below it, on a
+    translucent dark rounded card with a teal outline. The big text
+    shrinks until it fits the card — it can never overflow it.
+    """
+    from PIL import Image, ImageDraw
+
+    from tools.image_gen import _load_font, _wrap_by_width
+
+    card_w, card_h = 920, 480
+    img = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        [0, 0, card_w - 1, card_h - 1],
+        radius=36,
+        fill=(10, 14, 20, 165),
+        outline=(0, 212, 170, 255),
+        width=4,
+    )
+    big_size = 150
+    big_font = _load_font(big_size, bold=True)
+    while (
+        big_size > 60
+        and draw.textlength(big, font=big_font) > card_w - 80
+    ):
+        big_size -= 10
+        big_font = _load_font(big_size, bold=True)
+    bbox = draw.textbbox((0, 0), big, font=big_font)
+    big_h = bbox[3] - bbox[1]
+    draw.text(
+        ((card_w - draw.textlength(big, font=big_font)) / 2, 64),
+        big,
+        font=big_font,
+        fill=(255, 255, 255, 255),
+    )
+    label_font = _load_font(46, bold=True)
+    label_lines = _wrap_by_width(draw, label, label_font, card_w - 100)[:2]
+    y = 64 + big_h + 28
+    for line in label_lines:
+        lw = draw.textlength(line, font=label_font)
+        draw.text(
+            ((card_w - lw) / 2, y),
+            line,
+            font=label_font,
+            fill=(190, 220, 210, 255),
+        )
+        y += 58
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest_path, "PNG")
+    return dest_path
+
+
+def _stat_card_clip(
+    big: str, label: str, duration: float, width: int, height: int
+) -> Any:
+    """Stat card as a MoviePy clip, centred, for the scene duration.
+
+    Returns None (with a warning) instead of raising when the card
+    cannot be rendered — a missing stat card must never kill a render.
+    """
+    from moviepy.editor import ImageClip
+
+    try:
+        key = hashlib.md5(f"{big}|{label}".encode("utf-8")).hexdigest()[:12]
+        dest = OUTPUT_DIR / f"stat_{key}.png"
+        _render_stat_card(big, label, dest)
+        return (
+            ImageClip(str(dest))
+            .set_duration(duration)
+            .set_position(("center", "center"))
+        )
+    except Exception as exc:  # noqa: BLE001 — stat is decoration
+        logger.warning(f"Stat card render failed ({exc}); skipping it.")
+        return None
+
+
+def _hook_text(script: Any) -> str:
+    """Hook for the first 2 s: the SEO title shortened, else the
+    first 5 words of scene 1's narration."""
+    title = ""
+    try:
+        title = (getattr(getattr(script, "seo", None), "title", "") or "").strip()
+    except Exception:  # noqa: BLE001 — fall through to narration
+        title = ""
+    if title:
+        head = re.split(r"\s[-|]\s", title)[0].strip()
+        words = head.split()
+        if 2 <= len(words) <= 6:
+            return head
+        return " ".join(words[:5])
+    scenes = getattr(script, "scenes", []) or []
+    if scenes:
+        return " ".join(
+            str(getattr(scenes[0], "narration", "") or "").split()[:5]
+        )
+    return ""
+
+
+def _render_hook_overlay(hook: str, dest_path: Path, width: int = 1080) -> Path:
+    """Render the hook title as a transparent PNG (1080x320).
+
+    ~96 px bold, centred, white with a black stroke so it reads over
+    any visual. Shrinks until it fits the frame width.
+    """
+    from PIL import Image, ImageDraw
+
+    from tools.image_gen import _load_font
+
+    img = Image.new("RGBA", (width, 320), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    size = 96
+    font = _load_font(size, bold=True)
+    while size > 48 and draw.textlength(hook, font=font) > width - 120:
+        size -= 8
+        font = _load_font(size, bold=True)
+    bbox = draw.textbbox((0, 0), hook, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x = (width - text_w) / 2 - bbox[0]
+    y = 40 - bbox[1]
+    draw.text(
+        (x, y),
+        hook,
+        font=font,
+        fill=(255, 255, 255, 255),
+        stroke_width=4,
+        stroke_fill=(0, 0, 0, 255),
+    )
+    bar_w = min(text_w, width - 160)
+    draw.rectangle(
+        [(width - bar_w) / 2, y + text_h + 18, (width + bar_w) / 2, y + text_h + 26],
+        fill=(0, 212, 170, 255),
+    )
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest_path, "PNG")
+    return dest_path
 
 
 def _burn_subtitles(video_path: Path, srt_path: Path) -> bool:
@@ -284,18 +545,38 @@ class VideoAssembler:
         # 2. Resolve visuals per scene — with real research data for charts.
         if bundle_data is not None and not isinstance(bundle_data, dict):
             bundle_data = research_bundle_to_chart_data(bundle_data)
-        visual_assets = resolve_scene_visuals(script, bundle_data=bundle_data)
+        visual_assets = resolve_scene_visuals(
+            script, bundle_data=bundle_data, is_shorts=self.is_shorts
+        )
 
         # 3. Locate background music
         bg_tracks = search_background_music()
         bg_music_path = download_media(bg_tracks[0]["url"], extension="mp3") if bg_tracks else None
 
-        # 4. Generate subtitle SRT manifest
-        srt_path = self._generate_srt(audio_assets, script)
+        # 4. Subtitles: NEVER for Shorts (Dev, 27 Nov 2026) — do not
+        # write on screen what the voiceover is saying. Shorts show
+        # visuals + stat cards + a hook title instead (see
+        # _extract_stat / _render_hook_overlay). Long video keeps its
+        # SRT subtitles, burned in after the render.
+        srt_path = None if self.is_shorts else self._generate_srt(audio_assets, script)
+        stat_texts = (
+            [getattr(s, "narration", "") for s in script.scenes]
+            if self.is_shorts
+            else None
+        )
+        hook_text = _hook_text(script) if self.is_shorts else ""
 
         # 5. Composite scenes via MoviePy / FFmpeg. Failures raise —
         # no placeholder MP4 is written as success in production.
-        return self._render_composition(dest_path, audio_assets, visual_assets, bg_music_path, srt_path)
+        return self._render_composition(
+            dest_path,
+            audio_assets,
+            visual_assets,
+            bg_music_path,
+            srt_path,
+            stat_texts=stat_texts,
+            hook_text=hook_text,
+        )
 
     def _generate_srt(self, audio_assets: List[Dict[str, Any]], script: Any) -> Path:
         """Generate time-aligned SRT subtitle file."""
@@ -328,7 +609,9 @@ class VideoAssembler:
         audio_assets: List[Dict[str, Any]],
         visual_assets: List[Dict[str, Any]],
         bg_music_path: Optional[str],
-        srt_path: Path,
+        srt_path: Optional[Path],
+        stat_texts: Optional[List[str]] = None,
+        hook_text: str = "",
     ) -> str:
         """Execute MoviePy / FFmpeg rendering pipeline.
 
@@ -354,6 +637,8 @@ class VideoAssembler:
             from moviepy.editor import (
                 AudioFileClip,
                 CompositeAudioClip,
+                CompositeVideoClip,
+                ImageClip,
                 VideoFileClip,
                 concatenate_videoclips,
             )
@@ -366,11 +651,33 @@ class VideoAssembler:
                 is_chart = v_info.get("visual_type") == "chart"
 
                 if v_info["media_type"] == "video" and Path(v_path).exists():
+                    # Cover-fill (F2): resize + center-crop to exactly
+                    # the canvas, so a landscape stock clip can never
+                    # shrink the whole Short to a 2:3 frame.
                     clip = VideoFileClip(v_path).subclip(0, min(dur, 10)).set_duration(dur)
+                    vw, vh = getattr(clip, "size", (width, height)) or (width, height)
+                    vscale = max(width / vw, height / vh) if vw and vh else 1.0
+                    nw, nh = int(round(vw * vscale)), int(round(vh * vscale))
+                    clip = clip.resize((nw, nh)).crop(
+                        x_center=nw // 2, y_center=nh // 2,
+                        width=width, height=height,
+                    )
                 else:
                     # Still image: Ken Burns zoom/pan (deterministic
                     # variant per scene) so it never sits static.
+                    # Cover-fills the canvas (F2).
                     clip = _ken_burns_clip(v_path, dur, width, height, variant=idx)
+
+                # Shorts stat card (new F1): one big figure + label
+                # per scene, centred over the visual. Never the
+                # narration text — Dev, 27 Nov 2026.
+                if self.is_shorts and stat_texts and idx < len(stat_texts):
+                    big, label = _extract_stat(stat_texts[idx])
+                    stat_clip = _stat_card_clip(big, label, dur, width, height)
+                    if stat_clip is not None:
+                        clip = CompositeVideoClip(
+                            [clip, stat_clip], size=(width, height)
+                        ).set_duration(dur)
 
                 # Fade-in: chart scenes fade in over CHART_FADEIN_SEC
                 # (the chart overlay fade-in); other scenes fade in over
@@ -446,6 +753,43 @@ class VideoAssembler:
                         "music."
                     )
 
+            # Hook title overlay (F4, Shorts only): the hook at the
+            # top for the first 2 s, then it fades out. Pillow PNG —
+            # no TextClip / ImageMagick. Audio is preserved across
+            # the composite.
+            if self.is_shorts and hook_text:
+                try:
+                    hook_path = _render_hook_overlay(
+                        hook_text, OUTPUT_DIR / "hook_overlay.png", width
+                    )
+                    hook_clip = (
+                        ImageClip(str(hook_path))
+                        .set_start(0)
+                        .set_duration(min(2.0, final_video.duration))
+                        .fadeout(0.5)
+                        .set_position(("center", 100))
+                    )
+                    hook_audio = final_video.audio
+                    final_video = CompositeVideoClip(
+                        [final_video, hook_clip], size=(width, height)
+                    ).set_duration(final_video.duration)
+                    if hook_audio is not None:
+                        final_video = final_video.set_audio(hook_audio)
+                except Exception as exc:  # noqa: BLE001 — hook is decoration
+                    logger.warning(f"Hook overlay failed ({exc}); skipping it.")
+
+            # Cover-fill guarantee (F2): the finished frame must be
+            # exactly the canvas — never a 2:3 or letterboxed output.
+            # Real clips always carry .size; fake/stub clips in unit
+            # tests do not, and are skipped rather than failed here
+            # (the real v2 sample render asserts the size on disk).
+            final_size = getattr(final_video, "size", None)
+            if final_size is not None and tuple(final_size) != (width, height):
+                raise RuntimeError(
+                    f"Render size mismatch: got {tuple(final_size)}, "
+                    f"expected {(width, height)}."
+                )
+
             final_video.write_videofile(
                 str(dest_path.resolve()),
                 fps=self.fps,
@@ -462,16 +806,21 @@ class VideoAssembler:
                     f"(missing or < {MIN_RENDER_BYTES} bytes)."
                 )
 
-            # Burn in subtitles (second FFmpeg pass). Best-effort: a
-            # failed burn keeps the good render, sets the flag False,
+            # Burn in subtitles (second FFmpeg pass) — long video
+            # only. Shorts never get narration subtitles (Dev,
+            # 27 Nov 2026): srt_path is None for Shorts. Best-effort:
+            # a failed burn keeps the good render, sets the flag False,
             # and logs a warning — never a silent claim.
-            self.subtitles_burned = _burn_subtitles(dest_path, srt_path)
-            if not self.subtitles_burned:
-                logger.warning(
-                    f"Render {dest_path} delivered WITHOUT burned-in "
-                    "subtitles (burn failed or unavailable). The SRT "
-                    f"file still exists at {srt_path} for manual use."
-                )
+            if srt_path is not None:
+                self.subtitles_burned = _burn_subtitles(dest_path, srt_path)
+                if not self.subtitles_burned:
+                    logger.warning(
+                        f"Render {dest_path} delivered WITHOUT burned-in "
+                        "subtitles (burn failed or unavailable). The SRT "
+                        f"file still exists at {srt_path} for manual use."
+                    )
+            else:
+                self.subtitles_burned = False
             return str(dest_path.resolve())
 
         except Exception as e:
