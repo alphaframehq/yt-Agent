@@ -339,6 +339,10 @@ class ResearchAgent:
                     url=article.get("url", ""),
                     snippet=article.get("snippet", ""),
                     confidence=REAL_DATA_CONFIDENCE,
+                    # Freshness (27 Nov 2026): carry the article's
+                    # publish date so downstream can tell current
+                    # news from old news; None when undated.
+                    published_at=article.get("published_at") or None,
                 )
             )
 
