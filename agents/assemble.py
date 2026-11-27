@@ -81,6 +81,17 @@ SUBTITLE_STYLE = (
     "FontName=DejaVu Sans,FontSize=22,PrimaryColour=&HFFFFFF&,"
     "OutlineColour=&H000000&,BorderStyle=1,Outline=2,Alignment=2,MarginV=40"
 )
+AUDIO_END_MARGIN_SEC = 0.1
+# Audio safety margin (run #23, 27 Nov 2026): every composed audio
+# track is ended this far BEFORE the video end. The background music
+# is a single 147.226s Pixabay track; a long video longer than that
+# crashed the render at the tail because set_duration() stretched the
+# music clip past its own file, and MoviePy's FFMPEG_AudioReader
+# raises ("Accessing time t=... with clip duration=...") as soon as
+# a whole requested audio chunk starts past the file end. Scene
+# narration durations are also rounded to 2 decimals from the WAV
+# frames, so a scene file can be a few ms shorter than its declared
+# duration — the same margin keeps those reads in range too.
 
 
 def _demo_mode_enabled() -> bool:
@@ -370,18 +381,70 @@ class VideoAssembler:
                 fade_in = max(CHART_FADEIN_SEC, t_sec) if is_chart else t_sec
                 clip = clip.fadein(fade_in).fadeout(t_sec)
 
-                # Attach scene voiceover audio
+                # Attach scene voiceover audio, trimmed to the scene
+                # length. A file longer than dur would bleed past the
+                # scene (and, on the last scene, past the video, so
+                # the composed audio would outlast the video). A file
+                # a few ms shorter than dur (durations are rounded to
+                # 2 decimals from the WAV frames) simply leaves
+                # silence in the tail gap — CompositeAudioClip skips
+                # clips that are not playing at a given time.
                 audio_clip = AudioFileClip(a_info["audio_path"])
+                if audio_clip.duration is not None and audio_clip.duration > dur:
+                    audio_clip = audio_clip.subclip(0, dur)
                 clip = clip.set_audio(audio_clip)
                 clips.append(clip)
 
             final_video = concatenate_videoclips(clips, method="compose")
 
-            # Add background music if present
+            # Add background music if present. The music track must
+            # never be stretched past its own length: set_duration()
+            # on a shorter file only changes the DECLARED duration,
+            # and MoviePy raises ("Accessing time t=... with clip
+            # duration=...") as soon as a whole requested audio chunk
+            # starts past the file end (run #23: the 147.226s Pixabay
+            # track vs a ~147.29s video). So a short track is looped
+            # to fill the video, a long one is trimmed, and the music
+            # always ends AUDIO_END_MARGIN_SEC before the video end.
+            # A degenerate (<= margin) video gets no music at all.
             if bg_music_path and Path(bg_music_path).exists():
-                bg_audio = AudioFileClip(bg_music_path).volumex(0.08).set_duration(final_video.duration)
-                final_audio = CompositeAudioClip([final_video.audio, bg_audio])
-                final_video = final_video.set_audio(final_audio)
+                bg_audio = AudioFileClip(bg_music_path).volumex(0.08)
+                music_target = final_video.duration - AUDIO_END_MARGIN_SEC
+                if music_target > 0:
+                    if bg_audio.duration is None:
+                        # Unknown length: cannot loop or trim it
+                        # safely, so leave it out rather than risk
+                        # reading past the end of the file.
+                        logger.warning(
+                            "Background music duration is unknown; "
+                            "skipping it rather than risk an overrun."
+                        )
+                    else:
+                        if bg_audio.duration < music_target:
+                            # Imported lazily: only the loop path needs
+                            # it, and importing moviepy.audio.fx at
+                            # the top of this function breaks the
+                            # fake-moviepy unit tests (their stub
+                            # module has no moviepy.audio submodule).
+                            from moviepy.audio.fx.all import audio_loop
+
+                            logger.info(
+                                f"Background music ({bg_audio.duration:.1f}s) "
+                                f"is shorter than the video "
+                                f"({final_video.duration:.1f}s); looping it "
+                                f"to {music_target:.1f}s."
+                            )
+                            bg_audio = audio_loop(bg_audio, duration=music_target)
+                        else:
+                            bg_audio = bg_audio.subclip(0, music_target)
+                        final_audio = CompositeAudioClip([final_video.audio, bg_audio])
+                        final_video = final_video.set_audio(final_audio)
+                else:
+                    logger.warning(
+                        "Video is shorter than the audio safety margin "
+                        f"({AUDIO_END_MARGIN_SEC}s); skipping background "
+                        "music."
+                    )
 
             final_video.write_videofile(
                 str(dest_path.resolve()),
