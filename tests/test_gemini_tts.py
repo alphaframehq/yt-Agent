@@ -60,10 +60,11 @@ def _tts_response(pcm: bytes, rate: int = 24000) -> dict:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, payload=None, text: str = ""):
+    def __init__(self, status_code: int, payload=None, text: str = "", headers=None):
         self.status_code = status_code
         self._payload = payload
         self.text = text
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -96,6 +97,10 @@ class TestGeminiTTS(unittest.TestCase):
         for name in ("GEMINI_KEY_POOL", "GEMINI_KEY_1", "GEMINI_KEY_2",
                      "GEMINI_TTS_VOICE", "GEMINI_TTS_MODEL", "TTS_PROVIDER"):
             os.environ.pop(name, None)
+        # Pacing off by default in tests (27 Nov 2026 TTS fix: the
+        # production default is 21s between scene calls).
+        os.environ["TTS_MIN_INTERVAL_SEC"] = "0"
+        gemini_tts._last_tts_call_at = 0.0
         self._tmp = tempfile.TemporaryDirectory()
         self._cache_dir = Path(self._tmp.name) / "audio"
         self._cache_dir.mkdir(parents=True)
@@ -108,6 +113,7 @@ class TestGeminiTTS(unittest.TestCase):
         os.environ.pop("GEMINI_KEY", None)
         os.environ.pop("GEMINI_KEY_1", None)
         os.environ.pop("GEMINI_KEY_2", None)
+        os.environ.pop("TTS_MIN_INTERVAL_SEC", None)
         reset_gemini_pool()
 
     def _run_with(self, responses, text="Hello world, this is a test."):
@@ -214,6 +220,65 @@ class TestGeminiTTS(unittest.TestCase):
         self.assertEqual(len(client.posts), 2)
         self.assertIn(_FAKE_KEY, client.posts[0]["url"])
         self.assertIn(_FAKE_KEY_2, client.posts[1]["url"])
+
+    def test_gemini_key_2_used_after_key_1_429(self):
+        """27 Nov 2026 (runs #19/#20): the second key the user creates
+        as GEMINI_KEY_2 is tried after GEMINI_KEY hits 429."""
+        os.environ["GEMINI_KEY_2"] = _FAKE_KEY_2
+        reset_gemini_pool()
+        client = _FakeClient([
+            _FakeResponse(429, text="rate limited"),
+            _FakeResponse(200, _tts_response(_pcm_bytes(1.0))),
+        ])
+        with patch.object(gemini_tts.httpx, "Client", return_value=client):
+            path, duration = synthesize_speech("Second key test.")
+        self.assertEqual(duration, 1.0)
+        self.assertEqual(len(client.posts), 2)
+        self.assertIn(_FAKE_KEY, client.posts[0]["url"])
+        self.assertIn(_FAKE_KEY_2, client.posts[1]["url"])
+
+    def test_retry_after_header_honoured_then_retries(self):
+        """A 429 carrying Retry-After: 2 sleeps 2s, then the retry
+        with the same key succeeds. No key value is logged."""
+        client = _FakeClient([
+            _FakeResponse(429, text="rate limited",
+                          headers={"Retry-After": "2"}),
+            _FakeResponse(200, _tts_response(_pcm_bytes(1.0))),
+        ])
+        with patch.object(gemini_tts.httpx, "Client", return_value=client), \
+             patch.object(gemini_tts, "_sleep") as mock_sleep:
+            path, duration = synthesize_speech("Retry-After test.")
+        self.assertEqual(duration, 1.0)
+        self.assertEqual(len(client.posts), 2)
+        slept = [c.args[0] for c in mock_sleep.call_args_list]
+        self.assertIn(2.0, slept)
+
+    def test_all_keys_429_raises_after_three_attempts(self):
+        """One key, 429 every time: 3 rounds are tried (3 posts),
+        then it raises — never an infinite retry loop."""
+        client = _FakeClient([_FakeResponse(429, text="rate limited")] * 3)
+        with patch.object(gemini_tts.httpx, "Client", return_value=client), \
+             patch.object(gemini_tts, "_sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                synthesize_speech("Always rate limited.")
+        self.assertIn("All Gemini API keys in pool failed", str(ctx.exception))
+        self.assertEqual(len(client.posts), 3)
+
+    def test_pacing_enforced_between_scene_calls(self):
+        """TTS_MIN_INTERVAL_SEC=0.3: the second scene call waits
+        ~0.3s after the first (27 Nov 2026 pacing fix)."""
+        os.environ["TTS_MIN_INTERVAL_SEC"] = "0.3"
+        client = _FakeClient([
+            _FakeResponse(200, _tts_response(_pcm_bytes(1.0))),
+            _FakeResponse(200, _tts_response(_pcm_bytes(1.0))),
+        ])
+        with patch.object(gemini_tts.httpx, "Client", return_value=client), \
+             patch.object(gemini_tts, "_sleep") as mock_sleep:
+            synthesize_speech("Pacing scene one.")
+            synthesize_speech("Pacing scene two.")
+        self.assertEqual(len(client.posts), 2)
+        slept = [c.args[0] for c in mock_sleep.call_args_list]
+        self.assertTrue(any(s > 0.2 for s in slept), f"expected a ~0.3s pacing sleep, got {slept}")
 
 
 class TestTTSAgentWiring(unittest.TestCase):
