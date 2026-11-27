@@ -20,7 +20,8 @@ Fix under test (tools/llm_provider.py):
 3. 503 without Retry-After still raises immediately, one POST per key
    (the run #17 guarantee, re-pinned here).
 4. The configured model IDs are all on the verified-free list, and
-   the chain runs 3.8-flash -> 3.5-flash-lite -> bluesminds/kimi-k3
+   the chain runs 3.8-flash -> 3.5-flash-lite ->
+   bluesminds/nemotron-3.5-lightning-30b-a3b
    (paid fallback, 27 Nov 2026) -> openrouter/free.
    (27 Nov 2026, run #20: gemini-2.5-flash-lite was REMOVED from the
    chain — the model is retired and returns HTTP 404.)
@@ -245,7 +246,7 @@ class TestConfiguredModelIdsAreVerifiedFree(unittest.TestCase):
                 "gemini-3.5-flash-lite",
                 # Paid Bluesminds fallback sits after the free Gemini
                 # pool and before the free OpenRouter tail (27 Nov 2026).
-                "moonshotai/kimi-k3",
+                "nvidia/nemotron-3.5-lightning-30b-a3b",
                 "openrouter/free",
             ],
         )
