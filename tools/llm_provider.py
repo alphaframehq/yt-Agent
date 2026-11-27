@@ -65,7 +65,9 @@ __all__ = [
 FREE_TIER_TEXT_MODELS: tuple[str, ...] = (
     "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-lite",
+    # 27 Nov 2026: "gemini-2.5-flash-lite" REMOVED — it returns HTTP 404
+    # (retired) on the free tier; run #20 died on it in the Shorts
+    # fallback chain. Do NOT re-add it without a live 200 check.
 )
 FREE_TIER_TTS_MODELS: tuple[str, ...] = (
     "gemini-2.5-flash-preview-tts",
@@ -227,8 +229,15 @@ class LLMProvider:
         user_prompt: str,
         schema: Type[T],
         max_repair_attempts: int = 2,
+        validation_context: Optional[dict] = None,
     ) -> T:
-        """Enforces Pydantic schema output, with error-context re-prompting on validation failure."""
+        """Enforces Pydantic schema output, with error-context re-prompting on validation failure.
+
+        ``validation_context`` is passed to ``schema.model_validate``
+        as pydantic context, so a schema's mode="before" validators
+        can repair LLM output using caller-known facts (e.g. the
+        Shorts repair filling a missing pillar from the bundle).
+        """
         current_prompt = user_prompt
         last_error = ""
 
@@ -267,7 +276,7 @@ class LLMProvider:
 
             try:
                 data = json.loads(raw_text)
-                return schema.model_validate(data)
+                return schema.model_validate(data, context=validation_context)
             except (json.JSONDecodeError, ValidationError) as e:
                 last_error = _summarize_validation_error(e)
                 if attempt == max_repair_attempts:
@@ -612,8 +621,13 @@ def call_with_fallback(
     user_prompt: str,
     schema: Optional[Type[T]] = None,
     max_repair_attempts: int = 2,
+    validation_context: Optional[dict] = None,
 ) -> Any:
-    """Execute LLM call across a fallback chain e.g. [['bedrock', 'claude-3-5-haiku'], ['gemini', 'gemini-3.8-flash']]."""
+    """Execute LLM call across a fallback chain e.g. [['bedrock', 'claude-3-5-haiku'], ['gemini', 'gemini-3.8-flash']].
+
+    ``validation_context`` is forwarded to structured validation so
+    a schema can repair LLM output with caller-known facts.
+    """
     last_error = None
     for provider_name, model_name in chain:
         try:
@@ -621,7 +635,9 @@ def call_with_fallback(
             provider = LLMProvider(provider_name, model_name)
             if schema is not None:
                 return provider.call_structured(
-                    system_prompt, user_prompt, schema, max_repair_attempts=max_repair_attempts
+                    system_prompt, user_prompt, schema,
+                    max_repair_attempts=max_repair_attempts,
+                    validation_context=validation_context,
                 )
             else:
                 return provider.call(system_prompt, user_prompt)
