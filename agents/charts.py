@@ -593,12 +593,23 @@ def generate_chart_by_type(chart_type: str, data: Optional[Dict[str, Any]] = Non
 def chart_to_clip(png_path: str, duration: float) -> Any:
     """Convert a chart PNG into an animated video clip.
 
-    Applies the same motion treatment as the assembler: a Ken Burns
-    zoom/pan (so the chart never sits static) plus a 0.8s fade-in.
-    If MoviePy or the motion helper is unavailable, falls back to a
-    plain still clip — and if even that fails, returns the PNG path so
+    Phase 3 (28 Nov 2026): the chart DRAWS IN left-to-right with a
+    teal pen line (``agents.assemble._chart_build_clip``) instead of
+    merely fading in — a chart scene now shows a drawing being made.
+    If MoviePy's VideoClip (or the build-in helper) is unavailable,
+    falls back to the old treatment — a Ken Burns zoom/pan plus a
+    0.8s fade-in — and if even that fails, returns the PNG path so
     the caller can decide; it never claims motion it did not apply.
     """
+    try:
+        from agents.assemble import _chart_build_clip
+
+        return _chart_build_clip(png_path, duration, 1920, 1080)
+    except Exception as e:
+        logger.warning(
+            f"Chart draw-in unavailable for {png_path} ({e}); "
+            "falling back to Ken Burns + fade-in."
+        )
     try:
         from moviepy.editor import ImageClip
 
