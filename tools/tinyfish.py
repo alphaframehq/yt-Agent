@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
 from tenacity import (
@@ -46,6 +47,18 @@ __all__ = [
 
 CACHE_DIR = Path("cache/tinyfish")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Cache TTL (27 Nov 2026): a cached TinySearch result older than 24h
+# must be re-fetched, never served forever — news goes stale and the
+# script would cite yesterday's news as today's.
+CACHE_TTL_SEC = 24 * 3600
+
+# Max article age (27 Nov 2026): the script must not cite month-old
+# news as current. Articles with a parseable publish date older than
+# 7 days are dropped from TinySearch and RSS results. Undated (or
+# unparseable-date) articles are kept — their age cannot be verified
+# and dropping them would fail runs on dateless feeds.
+MAX_ARTICLE_AGE_DAYS = 7
 
 # URL fragments used by the pre-patch fabricated-article fallback. Any cached
 # article whose URL contains one of these was invented, never retrieved.
@@ -108,6 +121,57 @@ def _epoch_to_iso(epoch: int) -> str:
         return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
     except (TypeError, ValueError, OverflowError):
         return ""
+
+
+def _parse_published_at(value: Any) -> Optional[datetime]:
+    """Parse a publish date to an aware UTC datetime.
+
+    Accepts ISO-8601 strings (with or without a trailing ``Z``),
+    plain ``YYYY-MM-DD`` dates, and epoch seconds. Returns None when
+    the article is undated or the date is unparseable — the caller
+    treats that as "age unknown", never as stale.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(raw, "%Y-%m-%d")
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return None
+
+
+def _filter_fresh(
+    articles: List[Dict[str, Any]],
+    max_age_days: int = MAX_ARTICLE_AGE_DAYS,
+) -> List[Dict[str, Any]]:
+    """Drop articles older than ``max_age_days``; undated kept."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    fresh = []
+    for article in articles:
+        published = _parse_published_at(article.get("published_at"))
+        if published is not None and published < cutoff:
+            logger.info(
+                f"Dropping stale article ({published.date()}) older than "
+                f"{max_age_days}d: {str(article.get('title', ''))[:80]}"
+            )
+            continue
+        fresh.append(article)
+    return fresh
 
 
 def _tinysearch_get(
@@ -196,6 +260,11 @@ def _tinysearch_query(topic: str, max_results: int) -> List[Dict[str, Any]]:
             )
             last_error = exc
             continue
+        # Freshness (27 Nov 2026): month-old news must not be cited
+        # as current — drop stale articles per domain type, so a
+        # stale "news" result falls through to "web" instead of
+        # being served.
+        articles = _filter_fresh(articles)
         if articles:
             return articles
     raise RuntimeError(
@@ -224,7 +293,9 @@ def _search_rss_fallback(
                 "published_at": _epoch_to_iso(item.published_at),
             }
         )
-    return articles
+    # Freshness (27 Nov 2026): same 7-day max age as TinySearch —
+    # the script must not cite month-old RSS news as current.
+    return _filter_fresh(articles)
 
 
 def search_fintech_context(
@@ -252,15 +323,27 @@ def search_fintech_context(
 
     if cache_file.exists():
         try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            # Drop any fabricated articles cached by the pre-patch fallback
-            # instead of serving them as if they were real research.
-            real = [a for a in cached if not _is_fabricated_article(a)]
-            if real:
-                return real
-            logger.warning(
-                "TinyFish cache contained only fabricated articles; re-querying API."
-            )
+            # 24h TTL (27 Nov 2026): a stale cache must be re-fetched,
+            # never served forever — news goes stale.
+            if time.time() - cache_file.stat().st_mtime > CACHE_TTL_SEC:
+                logger.info(
+                    "TinyFish cache is older than 24h; re-fetching "
+                    f"instead of serving it for topic '{topic}'."
+                )
+            else:
+                cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                # Drop any fabricated articles cached by the pre-patch fallback
+                # instead of serving them as if they were real research.
+                real = [a for a in cached if not _is_fabricated_article(a)]
+                # Same 7-day max age as fresh results — a pre-patch
+                # cache entry could hold an already-stale article.
+                real = _filter_fresh(real)
+                if real:
+                    return real
+                logger.warning(
+                    "TinyFish cache contained only fabricated or stale "
+                    "articles; re-querying API."
+                )
         except Exception:
             pass
 
