@@ -288,6 +288,65 @@ def _generate_flux(prompt: str, dest_path: Path, aspect_ratio: str = "16:9") -> 
     raise RuntimeError("No output from Replicate FLUX")
 
 
+def _load_font(size: int, bold: bool = True):
+    """Load a real DejaVu TTF at *size* (Shorts quality fix F3/F4).
+
+    Searches the standard system font dirs, then matplotlib's font
+    manager (matplotlib is a repo dependency for charts). Falls back
+    to Pillow's default bitmap font with a warning — the caller must
+    still render, never crash on a missing font. Never returns None.
+    """
+    from PIL import ImageFont
+
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/local/share/fonts/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/local/share/fonts/DejaVuSans.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    try:
+        from matplotlib import font_manager
+
+        found = font_manager.findfont(
+            "DejaVu Sans", fallback_to_default=False
+        )
+        return ImageFont.truetype(found, size)
+    except Exception:  # noqa: BLE001 — bitmap fallback, never crash
+        logger.warning(
+            "DejaVu TTF not found; using Pillow default bitmap font "
+            "(text will be small). Install fonts-dejavu for proper "
+            "title cards."
+        )
+        return ImageFont.load_default()
+
+
+def _wrap_by_width(draw: Any, text: str, font: Any, max_width: int) -> list:
+    """Word-wrap *text* into lines no wider than *max_width* px."""
+    words = text.split()
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        trial = " ".join(current + [word])
+        if draw.textlength(trial, font=font) <= max_width or not current:
+            current.append(word)
+        else:
+            lines.append(" ".join(current))
+            current = [word]
+    if current:
+        lines.append(" ".join(current))
+    return lines
+
+
 def generate_programmatic_visual(
     prompt: str, dest_path: Path, aspect_ratio: str = "16:9"
 ) -> Path:
@@ -309,7 +368,9 @@ def generate_programmatic_visual(
     """
     from PIL import Image, ImageDraw
 
-    width, height = (720, 1280) if aspect_ratio == "9:16" else (1280, 720)
+    # Shorts cards are full 1080x1920 (F3): a 720x1280 card would be
+    # upscaled by the cover-fill and look soft. 16:9 stays 1280x720.
+    width, height = (1080, 1920) if aspect_ratio == "9:16" else (1280, 720)
     img = Image.new("RGB", (width, height), color=(14, 17, 23))
     draw = ImageDraw.Draw(img)
 
@@ -330,22 +391,33 @@ def generate_programmatic_visual(
         width=1,
     )
 
-    # Title lines from the prompt's opening words, wrapped.
-    words = str(prompt or "").split()
-    lines: list[str] = []
-    current: list[str] = []
-    for word in words:
-        current.append(word)
-        if len(" ".join(current)) > 32:
-            lines.append(" ".join(current))
-            current = []
-    if current:
-        lines.append(" ".join(current))
-    y = height // 3
-    for line in lines[:5]:
-        draw.text((margin + 30, y), line, fill=(230, 237, 243))
-        y += 44
-    draw.text((margin + 30, height - margin - 40), "TUBEPILOT AI", fill=(0, 212, 170))
+    # Title in a real TTF (F3) — never the default bitmap font. Text
+    # is measured and centered; max 3 lines, truncated with an
+    # ellipsis so it can never overflow the card.
+    font_size = 64 if aspect_ratio == "9:16" else 48
+    font = _load_font(font_size, bold=True)
+    text_width = width - 2 * (margin + 30)
+    lines = _wrap_by_width(draw, str(prompt or ""), font, text_width)[:3]
+    if len(_wrap_by_width(draw, str(prompt or ""), font, text_width)) > 3:
+        lines[2] = lines[2].rstrip(".") + "…"
+    line_height = int(font_size * 1.25)
+    block_h = line_height * len(lines)
+    y = height // 3 - block_h // 2
+    for line in lines:
+        line_w = draw.textlength(line, font=font)
+        draw.text(
+            ((width - line_w) / 2, y), line, font=font, fill=(230, 237, 243)
+        )
+        y += line_height
+    footer_font = _load_font(36 if aspect_ratio == "9:16" else 28, bold=True)
+    footer = "TUBEPILOT AI"
+    fw = draw.textlength(footer, font=footer_font)
+    draw.text(
+        ((width - fw) / 2, height - margin - 50),
+        footer,
+        font=footer_font,
+        fill=(0, 212, 170),
+    )
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest_path, "PNG")
