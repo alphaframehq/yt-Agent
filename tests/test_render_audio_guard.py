@@ -153,21 +153,22 @@ class TestRenderAudioGuard(unittest.TestCase):
         return dest
 
     def test_short_music_is_looped_not_stretched(self):
-        """Run #23, scaled down: 3.0s video, 2.0s music. Before the
+        """Run #23, scaled down: 2.4s video (2 x 1.5s scenes minus the
+        0.6s Phase-3 cross-dissolve overlap), 2.0s music. Before the
         fix this raised 'Accessing time t=2.0x, clip duration=2'."""
         dest = self._render(
             durations=(1.5, 1.5), audio_secs=(1.5, 1.5),
             music_sec=2.0, dest_name="render_short_music.mp4",
         )
-        self.assertAlmostEqual(_probe_duration_sec(dest), 3.0, delta=0.2)
+        self.assertAlmostEqual(_probe_duration_sec(dest), 2.4, delta=0.2)
 
     def test_long_music_is_trimmed(self):
-        """5.0s music under a 3.0s video: trimmed, renders fine."""
+        """5.0s music under a 2.4s video: trimmed, renders fine."""
         dest = self._render(
             durations=(1.5, 1.5), audio_secs=(1.5, 1.5),
             music_sec=5.0, dest_name="render_long_music.mp4",
         )
-        self.assertAlmostEqual(_probe_duration_sec(dest), 3.0, delta=0.2)
+        self.assertAlmostEqual(_probe_duration_sec(dest), 2.4, delta=0.2)
 
     def test_scene_audio_longer_than_scene_is_trimmed(self):
         """2.0s narration files declared as 1.5s scenes: the audio
@@ -176,7 +177,7 @@ class TestRenderAudioGuard(unittest.TestCase):
             durations=(1.5, 1.5), audio_secs=(2.0, 2.0),
             music_sec=None, dest_name="render_long_audio.mp4",
         )
-        self.assertAlmostEqual(_probe_duration_sec(dest), 3.0, delta=0.2)
+        self.assertAlmostEqual(_probe_duration_sec(dest), 2.4, delta=0.2)
 
     def test_scene_audio_shorter_than_scene_renders(self):
         """Declared durations rounded up 2 decimals from the WAV
@@ -186,7 +187,7 @@ class TestRenderAudioGuard(unittest.TestCase):
             durations=(1.51, 1.51), audio_secs=(1.5, 1.5),
             music_sec=None, dest_name="render_short_audio.mp4",
         )
-        self.assertAlmostEqual(_probe_duration_sec(dest), 3.02, delta=0.2)
+        self.assertAlmostEqual(_probe_duration_sec(dest), 2.42, delta=0.2)
 
     def test_no_music_renders(self):
         """Baseline: no background music at all still renders."""
@@ -194,7 +195,7 @@ class TestRenderAudioGuard(unittest.TestCase):
             durations=(1.5, 1.5), audio_secs=(1.5, 1.5),
             music_sec=None, dest_name="render_no_music.mp4",
         )
-        self.assertAlmostEqual(_probe_duration_sec(dest), 3.0, delta=0.2)
+        self.assertAlmostEqual(_probe_duration_sec(dest), 2.4, delta=0.2)
 
 
 if __name__ == "__main__":
