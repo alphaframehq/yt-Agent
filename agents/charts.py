@@ -608,7 +608,10 @@ def chart_to_clip(png_path: str, duration: float) -> Any:
                 _ken_burns_clip,
             )
 
-            clip = _ken_burns_clip(png_path, duration)
+            clip = _ken_burns_clip(png_path, duration, cover=False)
+            # cover=False: chart PNGs are 1800x900 (2:1); cover-fill
+            # would crop their axis labels. The old letterbox
+            # behaviour is kept for charts only.
             return clip.fadein(CHART_FADEIN_SEC)
         except Exception as e:
             logger.warning(
