@@ -282,7 +282,7 @@ class TestGeminiTTS(unittest.TestCase):
 
 
 class TestTTSAgentWiring(unittest.TestCase):
-    """agents/tts.py: Gemini default, Polly fallback only with AWS keys."""
+    """agents/tts.py: Gemini default, Kokoro fallback, Polly last (AWS keys only)."""
 
     def setUp(self):
         for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "TTS_PROVIDER"):
@@ -296,28 +296,39 @@ class TestTTSAgentWiring(unittest.TestCase):
         from agents.tts import synthesize_scene_audio
         with patch("agents.tts.synthesize_speech_gemini",
                    return_value=("/tmp/fake.wav", 3.5)) as mock_gemini, \
+             patch("agents.tts.synthesize_speech_kokoro") as mock_kokoro, \
              patch("agents.tts.synthesize_speech_polly") as mock_polly:
             path, duration = synthesize_scene_audio("Hello.", voice="Joanna")
         self.assertEqual((path, duration), ("/tmp/fake.wav", 3.5))
         mock_gemini.assert_called_once()
+        mock_kokoro.assert_not_called()
         mock_polly.assert_not_called()
 
     def test_gemini_failure_without_aws_keys_raises_original_error(self):
+        """27 Nov 2026 (Kokoro fallback): Gemini fails AND Kokoro fails
+        AND no AWS keys -> the ORIGINAL Gemini error is raised
+        (fail-loud, never masked)."""
         from agents.tts import synthesize_scene_audio
         gemini_err = RuntimeError("Gemini TTS request failed with HTTP 500")
         with patch("agents.tts.synthesize_speech_gemini", side_effect=gemini_err), \
+             patch("agents.tts.synthesize_speech_kokoro",
+                   side_effect=RuntimeError("Kokoro down")) as mock_kokoro, \
              patch("agents.tts.synthesize_speech_polly") as mock_polly:
             with self.assertRaises(RuntimeError) as ctx:
                 synthesize_scene_audio("Hello.")
         self.assertIs(ctx.exception, gemini_err)
+        mock_kokoro.assert_called_once()
         mock_polly.assert_not_called()
 
     def test_polly_fallback_when_aws_keys_exist(self):
+        """Gemini fails -> Kokoro fails -> Polly (keys exist) is used."""
         from agents.tts import synthesize_scene_audio
         os.environ["AWS_ACCESS_KEY_ID"] = "AKIAFAKEKEY123456"
         os.environ["AWS_SECRET_ACCESS_KEY"] = "fake-secret-1234567890"
         with patch("agents.tts.synthesize_speech_gemini",
                    side_effect=RuntimeError("Gemini TTS down")), \
+             patch("agents.tts.synthesize_speech_kokoro",
+                   side_effect=RuntimeError("Kokoro down")), \
              patch("agents.tts.synthesize_speech_polly",
                    return_value=("/tmp/polly.mp3", 2.0)) as mock_polly:
             path, duration = synthesize_scene_audio("Hello.")
@@ -328,11 +339,13 @@ class TestTTSAgentWiring(unittest.TestCase):
         from agents.tts import synthesize_scene_audio
         os.environ["TTS_PROVIDER"] = "polly"
         with patch("agents.tts.synthesize_speech_gemini") as mock_gemini, \
+             patch("agents.tts.synthesize_speech_kokoro") as mock_kokoro, \
              patch("agents.tts.synthesize_speech_polly",
                    return_value=("/tmp/polly.mp3", 1.0)) as mock_polly:
             path, duration = synthesize_scene_audio("Hello.")
         self.assertEqual((path, duration), ("/tmp/polly.mp3", 1.0))
         mock_gemini.assert_not_called()
+        mock_kokoro.assert_not_called()
 
 
 if __name__ == "__main__":
