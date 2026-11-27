@@ -20,8 +20,9 @@ Fix under test (tools/llm_provider.py):
 3. 503 without Retry-After still raises immediately, one POST per key
    (the run #17 guarantee, re-pinned here).
 4. The configured model IDs are all on the verified-free list, and
-   the chain runs 3.8-flash -> 3.5-flash-lite -> 2.5-flash-lite ->
-   openrouter/free.
+   the chain runs 3.8-flash -> 3.5-flash-lite -> openrouter/free.
+   (27 Nov 2026, run #20: gemini-2.5-flash-lite was REMOVED from the
+   chain — the model is retired and returns HTTP 404.)
 
 No network, no real keys: httpx and time.sleep are faked.
 """
@@ -241,7 +242,6 @@ class TestConfiguredModelIdsAreVerifiedFree(unittest.TestCase):
             [
                 "gemini-3.8-flash",
                 "gemini-3.5-flash-lite",
-                "gemini-2.5-flash-lite",
                 "openrouter/free",
             ],
         )
