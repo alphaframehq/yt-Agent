@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-11-27T17:48:22.128930+00:00",
+  "generated_at_utc": "2026-11-27T18:44:41.048188+00:00",
   "spreadsheet_id": "1RNsITrO_XVqVeY7zTedUbsSWJQVrL7yUSvUPm8-cUUw",
   "tabs": {
     "yt_videos": {
@@ -54,7 +54,7 @@
       "rows": []
     },
     "yt_pipeline_runs": {
-      "count": 20,
+      "count": 21,
       "rows": [
         {
           "run_id": "run_850f5966",
@@ -383,6 +383,24 @@
             "shorts_video_ids": [
               "VdfYic0tqqM",
               "QQ4R66FbBEg"
+            ],
+            "cross_linked": false
+          }
+        },
+        {
+          "run_id": "run_1b268974",
+          "started_at": "1795802823",
+          "ttl": "1803578823",
+          "extra_json": {
+            "kind": "daily_run",
+            "topic": "ChatGPT Wallet",
+            "pillar": "ai_everything",
+            "long_status": "failed",
+            "long_video_id": null,
+            "shorts_overall": "partial",
+            "shorts_uploaded": 1,
+            "shorts_video_ids": [
+              "6cBN19uA7_o"
             ],
             "cross_linked": false
           }
@@ -1107,7 +1125,7 @@
       ]
     },
     "yt_shorts": {
-      "count": 8,
+      "count": 9,
       "rows": [
         {
           "short_id": "short_63e5a853",
@@ -1412,6 +1430,44 @@
             "short_index": 1,
             "format": "short"
           }
+        },
+        {
+          "short_id": "short_ad5fbb92",
+          "parent_topic": "ChatGPT Wallet",
+          "topic": "According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a",
+          "yt_video_id": "6cBN19uA7_o",
+          "yt_url": "https://youtu.be/6cBN19uA7_o",
+          "title": "According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a",
+          "status": "pending_approval",
+          "created_at": "1795802822",
+          "published_at": null,
+          "cost_usd": "0",
+          "extra_json": {
+            "description_preview": "DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do not endors",
+            "description": "DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do not endorse buying or selling any security.\n\nAccording to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail environments. This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security handshakes between language models and legacy e-commerce infrastructure. The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.\n\nFull narration: According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail environments. This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security handshakes between language models and legacy e-commerce infrastructure. The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.\n\nFull narration: According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail environments. This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security handshakes between language models and legacy e-commerce infrastructure. The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.\n\nWatch next:\n• ChatGPT Wallet: Ab AI Agent Aapke Paise Kharch Karega — https://youtu.be/W0khre5Fxsw\n\nSources / References:\n• ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test - DesignRush — Google News — https://news.google.com/rss/articles/CBMiekFVX3lxTE1SUTUyZzFORzRxSS02WmhNaVIyNG5fbURGNGQzeHBqWjVfd2hGM0RncUZ5eTZYdi1FVVNsbk5GeGJKeXRDX2Znc0dHejU4YW5oaVcxVE45alplXzJDTERObklzVFNkX3V1cWtYX2RhSVFBU0pOeUpyaUV3?oc=5\n• Trend signals: google_news, hacker_news, techmeme, bing_news",
+            "tags": [
+              "ChatGPT Wallet",
+              "AI",
+              "artificial intelligence",
+              "technology",
+              "future",
+              "explained",
+              "shorts",
+              "tech news",
+              "innovation",
+              "machine learning",
+              "digital future",
+              "tech explained",
+              "AI news",
+              "how it works",
+              "TubePilot AI"
+            ],
+            "thumbnail_url": null,
+            "script_json": "{\"pillar\":\"ai_everything\",\"scenes\":[{\"id\":1,\"section\":\"hook\",\"narration\":\"According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail environments.\",\"visual_prompt\":\"According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail enviro\",\"visual_type\":\"diagram\",\"chart_type\":null,\"duration_sec\":15,\"citations\":[]},{\"id\":2,\"section\":\"what_changed\",\"narration\":\"This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security handshakes between language models and legacy e-commerce infrastructure.\",\"visual_prompt\":\"This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security hand\",\"visual_type\":\"diagram\",\"chart_type\":null,\"duration_sec\":18,\"citations\":[]},{\"id\":3,\"section\":\"cta\",\"narration\":\"The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.\",\"visual_prompt\":\"The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily b\",\"visual_type\":\"diagram\",\"chart_type\":null,\"duration_sec\":13,\"citations\":[]}],\"seo\":{\"title\":\"According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a\",\"description\":\"DISCLAIMER: This video is for informational, educational, and software engineering analysis purposes only. Nothing stated here constitutes financial, investment, legal, or tax advice. We do not endorse buying or selling any security.\\n\\nAccording to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail environments. This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security handshakes between language models and legacy e-commerce infrastructure. The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.\\n\\nFull narration: According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail environments. This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security handshakes between language models and legacy e-commerce infrastructure. The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.\\n\\nFull narration: According to Google News under claim ID context_zero, ChatGPT Wallet Puts Brand Checkouts to a 5-Day Cyber Week Test, pushing autonomous AI purchasing pipelines directly into high-volume retail environments. This stress test evaluates whether automated agentic workflows can execute multi-step transactions reliably under extreme web traffic. We are looking at raw API latency, error rates, and security handshakes between language models and legacy e-commerce infrastructure. The full architectural breakdown is available in our long-form video. If you enjoy deep-dive architectural teardowns and institutional financial models, hit subscribe and ring the bell for our daily breakdowns.\",\"tags\":[\"ChatGPT Wallet\",\"AI\",\"artificial intelligence\",\"technology\",\"future\",\"explained\",\"shorts\",\"tech news\",\"innovation\",\"machine learning\",\"digital future\",\"tech explained\",\"AI news\",\"how it works\",\"TubePilot AI\"],\"chapters\":[]},\"meta\":{\"word_count\":95,\"estimated_duration_sec\":38},\"aspect_ratio\":\"9:16\"}",
+            "duration_sec": 44.766667,
+            "short_index": 0,
+            "format": "short"
+          }
         }
       ]
     }
@@ -1428,7 +1484,7 @@
     },
     "pending_requests": 0,
     "requests_total": 0,
-    "pipeline_runs_total": 20,
+    "pipeline_runs_total": 21,
     "config_keys": [],
     "active_models": null
   }
