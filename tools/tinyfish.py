@@ -101,6 +101,21 @@ def _is_fabricated_article(article: Dict[str, Any]) -> bool:
 # domain_type=news on the long Hindi-mixed topic and web was never
 # tried. _tinysearch_query() now catches the error per domain type and
 # falls through to web before giving up and hitting the RSS fallback.
+# UPDATE (28 Nov 2026, run #26): TinySearch now returns HTTP 400 for
+# BOTH domain types on the raw long Hindi-mixed topic question
+# (twice, on two different topics). The request shape is correct per
+# the current docs (verified 28 Nov 2026: GET the bare host, X-API-Key,
+# q/domain_type/language — docs.tinyfish.ai/search-api), and auth is
+# validated before the query (a bad key returns 401, not 400), so the
+# 400 is a rejection of the query itself. The API's own docs/examples
+# use short English keyword queries ("web automation tools"), so
+# _tinysearch_query() now sends the derived keyword query
+# (tools/trends.derive_search_query — ASCII, <=6 tokens, no
+# punctuation), the same query the RSS feeds already use. The RSS
+# fallback also had a slice-before-filter bug: it took the first 5
+# items and THEN dropped stale ones, so 5 stale Google News items hid
+# fresh Hacker News / TechMeme items further down the list — it now
+# filters fresh first, then slices.
 TINYSEARCH_BASE_URL = "https://api.search.tinyfish.ai"
 
 # RSS source labels for fallback articles (feed ids in tools/trends.py).
@@ -175,7 +190,7 @@ def _filter_fresh(
 
 
 def _tinysearch_get(
-    api_key: str, topic: str, max_results: int, domain_type: str
+    api_key: str, query: str, max_results: int, domain_type: str
 ) -> List[Dict[str, Any]]:
     """One TinySearch GET. Returns [] on zero results; raises on
     transport / HTTP / malformed-response failure."""
@@ -184,22 +199,22 @@ def _tinysearch_get(
             resp = client.get(
                 TINYSEARCH_BASE_URL,
                 headers={"X-API-Key": api_key},
-                params={"q": topic, "domain_type": domain_type, "language": "en"},
+                params={"q": query, "domain_type": domain_type, "language": "en"},
             )
             if resp.status_code != 200:
                 raise RuntimeError(
                     f"TinySearch returned HTTP {resp.status_code} "
-                    f"(domain_type={domain_type}) for topic '{topic}'"
+                    f"(domain_type={domain_type}) for query '{query}'"
                 )
             try:
                 data = resp.json()
             except ValueError as exc:
                 raise RuntimeError(
-                    f"TinySearch returned non-JSON response for topic '{topic}': {exc}"
+                    f"TinySearch returned non-JSON response for query '{query}': {exc}"
                 ) from exc
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         logger.error(f"TinySearch query failed: {e}")
-        raise RuntimeError(f"TinySearch query failed for topic '{topic}': {e}") from e
+        raise RuntimeError(f"TinySearch query failed for query '{query}': {e}") from e
 
     results = []
     for item in data.get("results", []) or []:
@@ -233,6 +248,11 @@ def _tinysearch_get(
 def _tinysearch_query(topic: str, max_results: int) -> List[Dict[str, Any]]:
     """TinySearch primary path: news articles first, then general web.
 
+    Sends the derived keyword query (tools/trends.derive_search_query),
+    not the raw topic: run #26 (28 Nov 2026) proved the raw long
+    Hindi-mixed question returns HTTP 400 on BOTH domain types, while
+    the API's own docs/examples use short English keyword queries.
+
     Each domain type is tried independently: an HTTP error on one
     (run #15 — TinySearch returned HTTP 400 for domain_type=news on
     the long Hindi-mixed topic, which used to abort the loop before
@@ -247,10 +267,26 @@ def _tinysearch_query(topic: str, max_results: int) -> List[Dict[str, Any]]:
     if not api_key:
         raise ValueError("TINYFISH_API_KEY is required for TinySearch")
 
+    # Run #26 (28 Nov 2026): the raw topic is a long Hindi-mixed
+    # question ("LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak
+    # — Simple Hindi Me") and TinySearch returned HTTP 400 for BOTH
+    # domain types on it — twice, on two different topics. The request
+    # shape is correct per the current docs (verified 28 Nov 2026:
+    # GET https://api.search.tinyfish.ai, X-API-Key,
+    # q/domain_type/language), and auth is validated before the query
+    # (a bad key returns 401, not 400), so the 400 is a rejection of
+    # the query itself. Send the same derived keyword query the RSS
+    # feeds already use — ASCII, <=6 tokens, no punctuation. The raw
+    # topic is kept in log/error messages for debuggability.
+    from tools.trends import derive_search_query
+
+    query = derive_search_query(topic)
+    logger.info(f"TinySearch query for topic '{topic}': '{query}'")
+
     last_error: Exception | None = None
     for domain_type in ("news", "web"):
         try:
-            articles = _tinysearch_get(api_key, topic, max_results, domain_type)
+            articles = _tinysearch_get(api_key, query, max_results, domain_type)
         except RuntimeError as exc:
             # A per-domain failure (e.g. HTTP 400 on news) must not
             # skip the other domain type — log and keep going.
@@ -283,7 +319,7 @@ def _search_rss_fallback(
 
     report = fetch_trends(topic=topic, pillar="ai_everything", opener=opener)
     articles = []
-    for item in report.items[:max_results]:
+    for item in report.items:
         articles.append(
             {
                 "title": item.title,
@@ -295,7 +331,11 @@ def _search_rss_fallback(
         )
     # Freshness (27 Nov 2026): same 7-day max age as TinySearch —
     # the script must not cite month-old RSS news as current.
-    return _filter_fresh(articles)
+    # Filter BEFORE slicing: run #26 attempt 1 had 5 stale Google
+    # News items first and fresh Hacker News / TechMeme items further
+    # down the list — slicing first threw the fresh ones away and the
+    # fallback returned nothing.
+    return _filter_fresh(articles)[:max_results]
 
 
 def search_fintech_context(

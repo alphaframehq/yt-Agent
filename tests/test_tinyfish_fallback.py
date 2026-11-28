@@ -168,7 +168,10 @@ class TestTinySearchNewHost(unittest.TestCase):
             self.assertEqual(url, TINYSEARCH_URL)
             self.assertEqual(headers, {"X-API-Key": "test-key"})
             self.assertEqual(params["domain_type"], "news")
-            self.assertEqual(params["q"], "LLM Training Kaise Hoti Hai?")
+            # Run #26 (28 Nov 2026): the raw long Hindi-mixed question
+            # 400s on both domain types — TinySearch gets the derived
+            # keyword query ("LLM Training"), not the raw topic.
+            self.assertEqual(params["q"], "LLM Training")
             return _FakeResponse(200, _tinysearch_payload([
                 {
                     "position": 1,
@@ -189,6 +192,41 @@ class TestTinySearchNewHost(unittest.TestCase):
         self.assertEqual(articles[0]["source"], "Example AI News")
         self.assertEqual(articles[0]["published_at"], recent)
         self.assertEqual(articles[0]["url"], "https://example.com/llm-breakthrough")
+
+    def test_sends_derived_keyword_query_not_raw_topic(self):
+        """Run #26 (28 Nov 2026): the exact run topic — a long
+        Hindi-mixed question with '?', em-dash and apostrophe — got
+        HTTP 400 on BOTH domain types. The derived ASCII keyword query
+        ("LLM Training Pretraining RLHF") is what goes on the wire for
+        news AND web."""
+        topic = (
+            "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak "
+            "— Simple Hindi Me"
+        )
+        calls = []
+
+        def behavior(url, headers, params):
+            calls.append((params["domain_type"], params["q"]))
+            if params["domain_type"] == "news":
+                return _FakeResponse(400, {"error": "bad request"})
+            return _FakeResponse(200, _tinysearch_payload([
+                {
+                    "position": 1,
+                    "site_name": "example.org",
+                    "title": "LLM Training Guide",
+                    "snippet": "A practical guide.",
+                    "url": "https://example.org/llm-guide",
+                }
+            ]))
+
+        _FakeClient.behavior = behavior
+        articles = tinyfish.search_fintech_context(topic)
+        self.assertEqual(calls, [
+            ("news", "LLM Training Pretraining RLHF"),
+            ("web", "LLM Training Pretraining RLHF"),
+        ])
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0]["title"], "LLM Training Guide")
 
     def test_news_400_falls_through_to_web(self):
         """Run #15: TinySearch HTTP 400 on news must NOT skip web.
@@ -442,6 +480,45 @@ class TestNewsFreshness(unittest.TestCase):
         with patch("tools.trends.fetch_trends", return_value=report):
             articles = tinyfish.search_fintech_context("Freshness RSS Topic")
         self.assertEqual([a["title"] for a in articles], ["Fresh RSS News"])
+
+    def test_fresh_items_after_stale_items_are_reached(self):
+        """Run #26 attempt 1: the RSS fallback took the first 5 items
+        (all stale Google News) and dropped them, never reaching the
+        fresh Hacker News / TechMeme items further down the list — the
+        fallback returned nothing. Freshness is now filtered BEFORE
+        slicing to max_results."""
+        _FakeClient.behavior = lambda u, h, p: (_ for _ in ()).throw(
+            httpx.ConnectError("dead", request=httpx.Request("GET", u))
+        )
+        now = int(time.time())
+        items = []
+        for i in range(5):
+            items.append(TrendItem(
+                title=f"Stale Google News {i}", source="google_news",
+                url=f"https://example.com/stale-{i}",
+                snippet="Stale.", published_at=now - 30 * 86400,
+            ))
+        items.append(TrendItem(
+            title="Fresh HN Story", source="hacker_news",
+            url="https://example.com/fresh-hn",
+            snippet="Fresh.", published_at=now - 3600,
+        ))
+        items.append(TrendItem(
+            title="Fresh TechMeme Story", source="techmeme",
+            url="https://example.com/fresh-tm",
+            snippet="Fresh.", published_at=now - 7200,
+        ))
+        report = TrendReport(
+            topic="Freshness RSS Slice Topic", pillar="ai_everything", angles=[],
+            items=items, sources=["google_news", "hacker_news", "techmeme"],
+            errors=[],
+        )
+        with patch("tools.trends.fetch_trends", return_value=report):
+            articles = tinyfish.search_fintech_context("Freshness RSS Slice Topic")
+        self.assertEqual(
+            [a["title"] for a in articles],
+            ["Fresh HN Story", "Fresh TechMeme Story"],
+        )
 
     def test_undated_articles_kept(self):
         """An article with no date at all is kept (age unverifiable)."""

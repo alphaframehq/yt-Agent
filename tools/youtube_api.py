@@ -212,27 +212,49 @@ def research_topic(topic: str) -> Dict[str, Any]:
     no service, on any API exception, and on zero results — no hardcoded
     invented titles/tags/gaps are returned, and nothing is cached to
     cache/youtube/ (the old cache persisted fabricated results).
+
+    Zero-result retry (28 Nov 2026, run #26 attempt 2): the raw long
+    Hindi-mixed topic returned zero results, killing research even
+    though the RSS fallback had found articles. A zero result on the
+    raw topic is retried once with the derived keyword query
+    (tools/trends.derive_search_query — the same short ASCII query
+    TinySearch and the RSS feeds use); only if that also returns zero
+    does it raise.
     """
     service = _get_youtube_service()  # Raises on missing/revoked OAuth creds.
-    try:
-        search_response = service.search().list(
-            q=topic,
-            part="id,snippet",
-            maxResults=10,
-            type="video",
-            order="viewCount",
-        ).execute()
-    except Exception as e:
-        raise RuntimeError(f"YouTube search API call failed for topic '{topic}': {e}") from e
+    from tools.trends import derive_search_query
 
-    top_titles: List[str] = []
-    for item in search_response.get("items", []):
-        snippet = item.get("snippet", {})
-        title = snippet.get("title")
-        if title:
-            top_titles.append(title)
+    queries = [topic]
+    derived = derive_search_query(topic)
+    if derived and derived != topic:
+        queries.append(derived)
 
-    if not top_titles:
+    for query in queries:
+        try:
+            search_response = service.search().list(
+                q=query,
+                part="id,snippet",
+                maxResults=10,
+                type="video",
+                order="viewCount",
+            ).execute()
+        except Exception as e:
+            raise RuntimeError(f"YouTube search API call failed for topic '{topic}': {e}") from e
+
+        top_titles: List[str] = []
+        for item in search_response.get("items", []):
+            snippet = item.get("snippet", {})
+            title = snippet.get("title")
+            if title:
+                top_titles.append(title)
+
+        if top_titles:
+            break
+        logger.warning(
+            f"YouTube search returned zero results for query '{query}' "
+            f"(topic '{topic}')."
+        )
+    else:
         raise RuntimeError(
             f"YouTube search returned zero results for topic '{topic}'. "
             "No invented titles/tags are returned as a fallback."

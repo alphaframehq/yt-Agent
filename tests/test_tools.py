@@ -46,6 +46,25 @@ from tools.pixabay import search_background_music
 from tools.polly import format_ssml, synthesize_speech
 
 
+class _FakeYouTubeService:
+    """search().list(q=...).execute() — canned items per query string."""
+
+    def __init__(self, by_query):
+        self.by_query = by_query
+        self.queries = []
+
+    def search(self):
+        return self
+
+    def list(self, q=None, **kwargs):
+        self.queries.append(q)
+        self._last_q = q
+        return self
+
+    def execute(self):
+        return {"items": self.by_query.get(self._last_q, [])}
+
+
 class TestPhase2Tools(unittest.TestCase):
     """Test suite covering all external tool integrations."""
 
@@ -170,6 +189,49 @@ class TestPhase2Tools(unittest.TestCase):
         of returning invented titles/tags."""
         with self.assertRaises(Exception):
             research_topic("How Revolut Makes Money")
+
+    def test_youtube_zero_results_retries_with_derived_query(self):
+        """Run #26 attempt 2 (28 Nov 2026): the raw Hindi-mixed topic
+        returned zero YouTube results and killed research even though
+        the RSS fallback had found articles. A zero result is now
+        retried once with the derived keyword query before raising."""
+        from unittest.mock import patch
+
+        topic = (
+            "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak "
+            "— Simple Hindi Me"
+        )
+        service = _FakeYouTubeService({
+            topic: [],
+            "LLM Training Pretraining RLHF": [
+                {"snippet": {"title": "LLM Training Explained"}}
+            ],
+        })
+        with patch(
+            "tools.youtube_api._get_youtube_service", return_value=service
+        ):
+            result = research_topic(topic)
+        self.assertEqual(
+            service.queries, [topic, "LLM Training Pretraining RLHF"]
+        )
+        self.assertEqual(result["top_titles"], ["LLM Training Explained"])
+        self.assertEqual(result["topic"], topic)
+
+    def test_youtube_zero_results_on_both_queries_raises(self):
+        """Zero results on the raw topic AND the derived query -> loud
+        failure, never invented titles."""
+        from unittest.mock import patch
+
+        topic = "LLM Training Kaise Hoti Hai? Pretraining Se RLHF Tak — Simple Hindi Me"
+        service = _FakeYouTubeService({})
+        with patch(
+            "tools.youtube_api._get_youtube_service", return_value=service
+        ):
+            with self.assertRaises(RuntimeError):
+                research_topic(topic)
+        self.assertEqual(
+            service.queries, [topic, "LLM Training Pretraining RLHF"]
+        )
 
     def test_polly_tts_synthesis_raises_without_aws(self):
         """Without AWS Polly credentials, synthesis must raise instead of
